@@ -43,9 +43,13 @@ jobs:
           mkdir -p dist
           cp target/release/bili-sync-rs dist/
           cat > dist/Dockerfile <<'EOF'
-          FROM alpine:3.20
-          RUN apk add --no-cache ca-certificates tzdata ffmpeg
-          ENV LANG=zh_CN.UTF-8 TZ=Asia/Shanghai HOME=/app RUST_BACKTRACE=1 RUST_LOG=None,bili_sync=info
+          # 二进制在 ubuntu 上编译（glibc 动态链接），运行镜像必须也是 glibc；
+          # 用 alpine(musl) 会报 "exec /app/bili-sync-rs: no such file or directory"
+          FROM debian:bookworm-slim
+          RUN apt-get update \
+              && apt-get install -y --no-install-recommends ca-certificates tzdata ffmpeg \
+              && rm -rf /var/lib/apt/lists/*
+          ENV LANG=C.UTF-8 TZ=Asia/Shanghai HOME=/app RUST_BACKTRACE=1 RUST_LOG=None,bili_sync=info
           WORKDIR /app
           COPY bili-sync-rs /app/bili-sync-rs
           RUN chmod +x /app/bili-sync-rs

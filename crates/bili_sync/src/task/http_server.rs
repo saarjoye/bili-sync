@@ -60,7 +60,7 @@ pub async fn http_server(
 
 /// 登录页：内嵌 HTML，不依赖前端构建产物
 async fn login_page() -> impl IntoResponse {
-    let html = include_str!("../login.html").replace(
+    let html = include_str!("../../login.html").replace(
         "版本 <b id=\"version\">-</b>",
         &format!("版本 <b id=\"version\">{}</b>", crate::config::version()),
     );

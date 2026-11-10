@@ -9,7 +9,7 @@ use crate::api::wrapper::ApiResponse;
 use crate::auth;
 use crate::config::VersionedConfig;
 
-mod auth as auth_routes;
+mod authapi;
 mod config;
 mod dashboard;
 mod login;
@@ -33,7 +33,7 @@ pub fn router() -> Router {
             .merge(ws::router())
             .merge(task::router())
             // 账号体系接口（登录/初始化/登出/状态），自身不做鉴权
-            .merge(auth_routes::router())
+            .merge(authapi::router())
             .layer(middleware::from_fn(auth)),
     )
 }

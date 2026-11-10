@@ -20,7 +20,9 @@ jobs:
       - name: Build web
         working-directory: web
         run: |
-          npm ci --no-audit --no-fund
+          # 上游 lockfile 与 package.json 有 peer 冲突（lock 里 eslint 9.x，package.json 要求 ^10），
+          # npm ci 会 ERESOLVE 失败，失败时退化为 npm install
+          npm ci --no-audit --no-fund || npm install --no-audit --no-fund --legacy-peer-deps
           npm run build
 
       - name: Setup Rust

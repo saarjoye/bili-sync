@@ -1,3 +1,22 @@
+![version](https://img.shields.io/badge/version-2.12.0-2563eb)
+![base](https://img.shields.io/badge/based%20on-bili--sync%20v2.11.1-71717a)
+
+> **本仓库是二开分支（v2.12.0）**：在上游 [amtoaer/bili-sync](https://github.com/amtoaer/bili-sync) 基础上增加
+> **账号密码登录**（首次访问创建管理员账号）、登录页与版本号展示；旧的 `auth_token` 仍保留用于脚本/Webhook 调用。
+> 详细改动见 [`FORK-NOTES.md`](FORK-NOTES.md)。
+
+### v2.12.0 主要改动
+
+| 改动 | 说明 |
+|---|---|
+| 账号密码登录 | 首次打开 WebUI 引导创建管理员账号（用户名 ≥3 位、密码 ≥8 位），之后用账号密码登录；密码以 SHA-256 + 随机盐 + 10 万次迭代存储，会话用 HttpOnly Cookie（7 天） |
+| 登录页 | `GET /login`，不依赖前端构建产物；未登录访问首页自动跳转 |
+| 版本号展示 | 登录页底部、`GET /api/auth/state` 返回 `version`，启动日志同步显示 |
+| 兼容旧调用 | `Authorization: <auth_token>` 与 WebSocket 的 `Sec-WebSocket-Protocol` 方式仍然有效，订阅助手/脚本无需改 |
+| 新增接口 | `GET /api/auth/state`、`POST /api/auth/setup`、`POST /api/auth/login`、`POST /api/auth/logout` |
+
+---
+
 ![bili-sync](https://socialify.git.ci/amtoaer/bili-sync/image?description=1&font=KoHo&issues=1&language=1&logo=https%3A%2F%2Fs2.loli.net%2F2023%2F12%2F02%2F9EwT2yInOu1d3zm.png&name=1&owner=1&pattern=Signal&pulls=1&stargazers=1&theme=Light)
 
 ## 简介

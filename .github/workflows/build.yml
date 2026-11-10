@@ -1,0 +1,65 @@
+name: build
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build web
+        working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build binary
+        run: cargo build --release --bin bili-sync-rs
+
+      - name: Build docker image
+        run: |
+          mkdir -p dist
+          cp target/release/bili-sync-rs dist/
+          cat > dist/Dockerfile <<'EOF'
+          FROM alpine:3.20
+          RUN apk add --no-cache ca-certificates tzdata ffmpeg
+          ENV LANG=zh_CN.UTF-8 TZ=Asia/Shanghai HOME=/app RUST_BACKTRACE=1 RUST_LOG=None,bili_sync=info
+          WORKDIR /app
+          COPY bili-sync-rs /app/bili-sync-rs
+          RUN chmod +x /app/bili-sync-rs
+          VOLUME ["/app/.config/bili-sync"]
+          EXPOSE 12345
+          ENTRYPOINT ["/app/bili-sync-rs"]
+          EOF
+          docker build -t bili-sync-rs:${GITHUB_REF_NAME#v} dist
+          docker save bili-sync-rs:${GITHUB_REF_NAME#v} -o "bili-sync-rs-${GITHUB_REF_NAME#v}-image.tar"
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: bili-sync-rs-linux-x86_64
+          path: target/release/bili-sync-rs
+
+      - name: Upload docker image
+        uses: actions/upload-artifact@v4
+        with:
+          name: bili-sync-rs-docker-image
+          path: bili-sync-rs-*-image.tar

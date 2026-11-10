@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Bili Sync · 登录</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --text: #18181b;
+    --muted: #71717a;
+    --border: #e4e4e7;
+    --primary: #2563eb;
+    --danger: #dc2626;
+    --ok: #16a34a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0b0b0f; --card: #16161a; --text: #f4f4f5; --muted: #a1a1aa; --border: #27272a; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: var(--bg); color: var(--text);
+    font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    padding: 24px;
+  }
+  .card {
+    width: 100%; max-width: 380px; background: var(--card); border: 1px solid var(--border);
+    border-radius: 16px; padding: 28px; box-shadow: 0 10px 30px rgb(0 0 0 / 6%);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .logo {
+    width: 34px; height: 34px; border-radius: 10px; background: var(--text); color: var(--card);
+    display: grid; place-items: center; font-weight: 700; font-size: 16px;
+  }
+  h1 { font-size: 18px; margin: 0; }
+  .sub { color: var(--muted); font-size: 12.5px; margin: 0 0 20px; }
+  label { display: block; font-size: 12.5px; color: var(--muted); margin: 14px 0 6px; }
+  input {
+    width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border);
+    background: transparent; color: var(--text); font-size: 14px; outline: none;
+  }
+  input:focus { border-color: var(--primary); }
+  button {
+    width: 100%; margin-top: 20px; padding: 11px 14px; border: 0; border-radius: 10px;
+    background: var(--primary); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  button:disabled { opacity: .6; cursor: not-allowed; }
+  .msg { margin-top: 14px; font-size: 13px; min-height: 20px; }
+  .msg.err { color: var(--danger); }
+  .msg.ok { color: var(--ok); }
+  .hint { margin-top: 18px; font-size: 12px; color: var(--muted); }
+  .foot { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; }
+</style>
+</head>
+<body>
+  <form class="card" id="form" autocomplete="on">
+    <div class="brand">
+      <div class="logo">B</div>
+      <h1>Bili Sync</h1>
+    </div>
+    <p class="sub" id="sub">正在检查登录状态…</p>
+
+    <label for="username">用户名</label>
+    <input id="username" name="username" autocomplete="username" placeholder="3-32 位字母/数字/_-. " />
+    <label for="password">密码</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" placeholder="至少 8 位" />
+    <label for="password2" id="password2-label" hidden>确认密码</label>
+    <input id="password2" name="password2" type="password" autocomplete="new-password" placeholder="再输入一次" hidden />
+
+    <button id="submit" type="submit" disabled>登录</button>
+    <div class="msg" id="msg"></div>
+    <p class="hint" id="hint" hidden>首次使用请创建管理账号，之后用该账号登录。</p>
+
+    <div class="foot">
+      <span>版本 <b id="version">-</b></span>
+      <span>amtoaer/bili-sync · fork</span>
+    </div>
+  </form>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const form = $('form'), msg = $('msg'), submit = $('submit');
+  const pwd2 = $('password2'), pwd2Label = $('password2-label'), hint = $('hint');
+  let initialized = false;
+
+  function show(text, kind) {
+    msg.textContent = text || '';
+    msg.className = 'msg' + (kind ? ' ' + kind : '');
+  }
+
+  async function loadState() {
+    try {
+      const r = await fetch('/api/auth/state', { credentials: 'same-origin' });
+      const body = await r.json();
+      const d = body.data || {};
+      $('version').textContent = d.version || '-';
+      initialized = !!d.initialized;
+      if (d.logged_in) { location.replace('/'); return; }
+      if (initialized) {
+        $('sub').textContent = '请使用账号密码登录';
+        pwd2.hidden = true; pwd2Label.hidden = true; hint.hidden = true;
+        submit.textContent = '登录';
+      } else {
+        $('sub').textContent = '首次使用，请创建管理账号';
+        pwd2.hidden = false; pwd2Label.hidden = false; hint.hidden = false;
+        submit.textContent = '创建账号并登录';
+        $('password').autocomplete = 'new-password';
+      }
+      submit.disabled = false;
+    } catch (e) {
+      show('无法连接后端服务：' + e, 'err');
+    }
+  }
+
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    show('');
+    const username = $('username').value.trim();
+    const password = $('password').value;
+    if (!username || !password) { show('请填写用户名和密码', 'err'); return; }
+    if (!initialized) {
+      if (password.length < 8) { show('密码至少 8 个字符', 'err'); return; }
+      if (password !== pwd2.value) { show('两次输入的密码不一致', 'err'); return; }
+    }
+    submit.disabled = true;
+    try {
+      const path = initialized ? '/api/auth/login' : '/api/auth/setup';
+      const r = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ username, password }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (r.ok && body.status_code === 200) {
+        show(initialized ? '登录成功，正在进入…' : '账号已创建，正在进入…', 'ok');
+        location.replace('/');
+        return;
+      }
+      show(body.message || ('请求失败（HTTP ' + r.status + '）'), 'err');
+    } catch (e) {
+      show('请求异常：' + e, 'err');
+    }
+    submit.disabled = false;
+  });
+
+  loadState();
+})();
+</script>
+</body>
+</html>

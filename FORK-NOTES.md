@@ -112,3 +112,39 @@ python tools/subscribe_helper.py add --mid xxx --select 1 --bs-url http://bili-s
 - 「系列（Series）」的自动发现不可用（B站 `series/series` 接口同样 -400），只能手工给 `sid` + `collection_type: 1`；
 - 课程合集在上游是「一集一个电影级目录」，要剧集化必须靠上游改造或本文第四节的插件方案；
 - 上游 `main` 落后 `develop`，二开若想用新特性请以 `develop` 为基线。
+
+## 七、v2.12.0：账号密码登录（本次二开）
+
+**动机**：上游 WebUI 只有单一 `auth_token`（16 位随机串，含 `!@#$%^&*` 等字符），
+没有账号密码、没有 TLS、默认监听 `0.0.0.0:12345`；token 还会被 shell 误解析（`$xxx` 被展开）。
+
+**改动**：
+
+| 文件 | 内容 |
+|---|---|
+| `crates/bili_sync_migration/src/m20261110_000001_add_auth_user.rs` | 新增 `auth_user` 表（id / username / password_hash / salt / created_at） |
+| `crates/bili_sync/src/auth.rs` | 密码哈希（SHA-256 + 32 位随机盐 + 100000 次迭代）、内存会话（DashMap，7 天 TTL）、Cookie 解析与 Set-Cookie 构造 |
+| `crates/bili_sync/src/api/routes/auth/mod.rs` | `GET /api/auth/state`、`POST /api/auth/setup`、`POST /api/auth/login`、`POST /api/auth/logout` |
+| `crates/bili_sync/src/api/routes/mod.rs` | 中间件改为「Cookie 会话优先，其次兼容旧 auth_token / WebSocket base64 token」；`/api/auth/*` 匿名可访问 |
+| `crates/bili_sync/src/task/http_server.rs` | 新增 `GET /login`（内嵌单页，含版本号）；未登录访问首页跳转登录页；静态资源放行 |
+| `crates/bili_sync/login.html` | 登录 / 首次创建账号的单页（深浅色自适应、显示版本号） |
+| `Cargo.toml`、`crates/bili_sync/Cargo.toml`、`web/package.json` | 版本 2.12.0；新增 `sha2` 依赖 |
+
+**接口行为**：
+
+```http
+GET  /api/auth/state     → {initialized, logged_in, username, version, auth_mode}
+POST /api/auth/setup     {username, password}   # 仅在未初始化时可用，成功后自动登录
+POST /api/auth/login     {username, password}   # 成功返回 Set-Cookie: bs_session=...; HttpOnly; Path=/; Max-Age=604800
+POST /api/auth/logout                           # 清会话与 Cookie
+```
+
+**兼容性**：`Authorization: <auth_token>`、WebSocket 的 `Sec-WebSocket-Protocol: base64(token)` 两条老通道保留，
+`tools/subscribe_helper.py`、MoviePilot webhook 等机器调用不受影响。
+
+**安全边界（仍未做的）**：
+
+- 程序本身不做 TLS，公网暴露仍需前置反向代理（Caddy/nginx）加 HTTPS；
+- 会话存内存，进程重启需重新登录；
+- 单用户模型（一个管理员账号），没有多用户/权限体系；
+- 建议部署时把端口只绑内网或配合 WireGuard/Tailscale。

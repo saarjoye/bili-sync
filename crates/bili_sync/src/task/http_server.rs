@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+﻿use std::collections::HashSet;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -26,6 +26,7 @@ pub async fn http_server(
     log_writer: LogHelper,
 ) -> Result<()> {
     let app = router()
+        .route("/login", get(login_page))
         .fallback_service(get(frontend_files).head(frontend_files))
         .layer(Extension(database_connection))
         .layer(Extension(bili_client))
@@ -57,10 +58,46 @@ pub async fn http_server(
     Ok(axum::serve(listener, ServiceExt::<Request>::into_make_service(app)).await?)
 }
 
+/// 登录页：内嵌 HTML，不依赖前端构建产物
+async fn login_page() -> impl IntoResponse {
+    let html = include_str!("../login.html").replace(
+        "版本 <b id=\"version\">-</b>",
+        &format!("版本 <b id=\"version\">{}</b>", crate::config::version()),
+    );
+    ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response()
+}
+
+fn accepts_html(headers: &axum::http::HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.contains("text/html"))
+        .unwrap_or(false)
+}
+
+fn redirect_to_login(headers: &axum::http::HeaderMap) -> axum::response::Response {
+    // SPA 的 XHR 请求（fetch）通常不带 text/html，避免把接口请求也重定向
+    if accepts_html(headers) {
+        axum::response::Redirect::to("/login").into_response()
+    } else {
+        (StatusCode::UNAUTHORIZED, "请先登录").into_response()
+    }
+}
+
 async fn frontend_files(request: Request) -> impl IntoResponse {
+    // 浏览器直接打开首页且未登录 → 跳转登录页
+    if request.uri().path() == "/" && crate::auth::current_user(request.headers()).is_none() {
+        return redirect_to_login(request.headers());
+    }
     let mut path = request.uri().path().trim_start_matches('/');
     if path.is_empty() || Asset::get(path).is_none() {
         path = "index.html";
+    }
+    if path == "index.html"
+        && crate::auth::current_user(request.headers()).is_none()
+        && accepts_html(request.headers())
+    {
+        return redirect_to_login(request.headers());
     }
     let Some(content) = Asset::get(path) else {
         return (StatusCode::NOT_FOUND, "404 Not Found").into_response();
@@ -115,3 +152,4 @@ async fn frontend_files(request: Request) -> impl IntoResponse {
     )
         .into_response()
 }
+

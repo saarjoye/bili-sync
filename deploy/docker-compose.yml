@@ -1,0 +1,21 @@
+# bili-sync 2.12.0（账号密码登录版）推荐部署方式
+# 镜像由 GitHub Actions 构建并推送到 ghcr.io，公开可拉，无需 docker login。
+services:
+  bili-sync:
+    image: ghcr.io/saarjoye/bili-sync:2.12.0
+    container_name: bili-sync
+    restart: unless-stopped
+    tty: true
+    ports:
+      # 建议只绑内网：改成 "<你的服务器IP>:12345:12345"；要外网请前置反代加 HTTPS
+      - "12345:12345"
+    environment:
+      - TZ=Asia/Shanghai
+      - RUST_LOG=info
+    volumes:
+      # 沿用原有配置目录（保留 B站登录态、订阅、数据库）；全新部署改成 ./config
+      - /home/docker/bili-sync/config:/app/.config/bili-sync
+      # 下载落盘：与 MoviePilot 共用（MP 容器内是 /downloads/bili）
+      - /mnt/movie/115down/bili:/data/bili
+    logging:
+      driver: local

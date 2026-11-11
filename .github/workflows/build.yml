@@ -67,6 +67,8 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          # 备用包名：用于排查「同名 package 拉不动」这类仓库侧问题
+          echo "image_alt=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/bili-sync-rs" >> "$GITHUB_OUTPUT"
 
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -86,6 +88,8 @@ jobs:
           tags: |
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
             ${{ steps.meta.outputs.image }}:latest
+            ${{ steps.meta.outputs.image_alt }}:${{ steps.meta.outputs.version }}
+            ${{ steps.meta.outputs.image_alt }}:latest
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}

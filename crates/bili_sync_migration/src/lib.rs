@@ -15,6 +15,9 @@ mod m20260712_123205_add_filter_option;
 mod m20260821_025000_mark_empty_tags_for_refetch;
 mod m20260823_000001_add_danmaku_last_synced_at;
 mod m20261110_000001_add_auth_user;
+mod m20261111_000001_add_dir_preset;
+mod m20261111_000002_add_collection_upper_name;
+mod m20261112_000001_add_subscription_schedule;
 
 pub struct Migrator;
 
@@ -37,6 +40,9 @@ impl MigratorTrait for Migrator {
             Box::new(m20260821_025000_mark_empty_tags_for_refetch::Migration),
             Box::new(m20260823_000001_add_danmaku_last_synced_at::Migration),
             Box::new(m20261110_000001_add_auth_user::Migration),
+            Box::new(m20261111_000001_add_dir_preset::Migration),
+            Box::new(m20261111_000002_add_collection_upper_name::Migration),
+            Box::new(m20261112_000001_add_subscription_schedule::Migration),
         ]
     }
 }

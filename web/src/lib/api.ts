@@ -35,6 +35,78 @@ import type {
 } from './types';
 import { wsManager } from './ws';
 
+// ===== 目录预设 & 订阅向导（二开新增） =====
+export interface DirPreset {
+	id: number;
+	alias: string;
+	local_path: string;
+	target115_path: string;
+	default_season: number;
+	/** 0=UP名 1=UP名-ID 2=仅ID */
+	upper_display: number;
+	sort_order: number;
+}
+
+export type DirPresetForm = Omit<DirPreset, 'id'>;
+
+export interface WizardCandidate {
+	sid: number;
+	collection_type: number;
+	name: string;
+	count: number;
+}
+
+export interface WizardResolveResponse {
+	kind: string;
+	mid?: number | null;
+	upper_name?: string | null;
+	sid?: number | null;
+	collection_type?: number | null;
+	bvid?: string | null;
+	fid?: number | null;
+	name?: string | null;
+	count?: number | null;
+	candidates: WizardCandidate[];
+	hint?: string | null;
+}
+
+export interface WizardSubscribeRequest {
+	dir_id: number;
+	mid: number;
+	upper_name?: string;
+	items: { sid: number; collection_type: number; name?: string }[];
+	follow_new?: boolean;
+	enable?: boolean;
+	/** 已存在时是否强制覆盖原下载路径 */
+	force_path?: boolean;
+}
+
+export interface DownloadVideoResponse {
+	video_id: number;
+	name: string;
+	upper_name: string;
+	mid: number;
+	path: string;
+	follow_new: boolean;
+}
+
+export interface WizardSubscribeItemResult {
+	sid: number;
+	name: string;
+	action: 'created' | 'updated';
+	mid: number;
+	upper_name: string;
+	path: string;
+	note: string;
+}
+
+export interface WizardSubscribeResponse {
+	items: WizardSubscribeItemResult[];
+	created: string[];
+	updated: string[];
+	submission_created: boolean;
+}
+
 // API 基础配置
 const API_BASE_URL = '/api';
 
@@ -235,6 +307,24 @@ class ApiClient {
 		return this.post<boolean>('/video-sources/submissions', request);
 	}
 
+	async updateSchedule(
+		type: string,
+		id: number,
+		form: {
+			schedule_mode: string;
+			interval_seconds?: number;
+			cron_expr?: string;
+			max_days?: number;
+			max_pages?: number;
+		}
+	): Promise<ApiResponse<boolean>> {
+		return this.put<boolean>(`/video-sources/${type}/${id}/schedule`, form);
+	}
+
+	async runVideoSource(type: string, id: number): Promise<ApiResponse<boolean>> {
+		return this.post<boolean>(`/video-sources/${type}/${id}/run`);
+	}
+
 	async getVideoSourcesDetails(): Promise<ApiResponse<VideoSourcesDetailsResponse>> {
 		return this.get<VideoSourcesDetailsResponse>('/video-sources/details');
 	}
@@ -287,6 +377,46 @@ class ApiClient {
 		return this.post<boolean>('/task/download');
 	}
 
+	// ===== 目录预设 =====
+	async getDirs(): Promise<ApiResponse<DirPreset[]>> {
+		return this.get<DirPreset[]>('/dirs');
+	}
+
+	async createDir(request: DirPresetForm): Promise<ApiResponse<DirPreset>> {
+		return this.post<DirPreset>('/dirs', request);
+	}
+
+	async updateDir(id: number, request: DirPresetForm): Promise<ApiResponse<DirPreset>> {
+		return this.put<DirPreset>(`/dirs/${id}`, request);
+	}
+
+	async deleteDir(id: number): Promise<ApiResponse<boolean>> {
+		return this.request<boolean>(`/dirs/${id}`, 'DELETE');
+	}
+
+	// ===== 订阅向导 =====
+	async wizardResolve(url: string): Promise<ApiResponse<WizardResolveResponse>> {
+		return this.post<WizardResolveResponse>('/wizard/resolve', { url });
+	}
+
+	async wizardSubscribe(
+		request: WizardSubscribeRequest
+	): Promise<ApiResponse<WizardSubscribeResponse>> {
+		return this.post<WizardSubscribeResponse>('/wizard/subscribe', request);
+	}
+
+	async downloadVideo(request: {
+		bvid: string;
+		dir_id: number;
+		follow_new?: boolean;
+	}): Promise<ApiResponse<DownloadVideoResponse>> {
+		return this.post<DownloadVideoResponse>('/wizard/download-video', request);
+	}
+
+	async backfillUpperNames(): Promise<ApiResponse<number>> {
+		return this.post<number>('/video-sources/backfill-upper');
+	}
+
 	async generateQrcode(): Promise<ApiResponse<GenerateQrcodeResponse>> {
 		return this.post<GenerateQrcodeResponse>('/login/qrcode/generate');
 	}
@@ -332,6 +462,18 @@ const api = {
 	insertCollection: (request: InsertCollectionRequest) => apiClient.insertCollection(request),
 	insertSubmission: (request: InsertSubmissionRequest) => apiClient.insertSubmission(request),
 	getVideoSourcesDetails: () => apiClient.getVideoSourcesDetails(),
+	runVideoSource: (type: string, id: number) => apiClient.runVideoSource(type, id),
+	updateSchedule: (
+		type: string,
+		id: number,
+		form: {
+			schedule_mode: string;
+			interval_seconds?: number;
+			cron_expr?: string;
+			max_days?: number;
+			max_pages?: number;
+		}
+	) => apiClient.updateSchedule(type, id, form),
 	updateVideoSource: (type: string, id: number, request: UpdateVideoSourceRequest) =>
 		apiClient.updateVideoSource(type, id, request),
 	removeVideoSource: (type: string, id: number) => apiClient.removeVideoSource(type, id),
@@ -355,6 +497,15 @@ const api = {
 	subscribeToTasks: (onMessage: (data: TaskStatus) => void) =>
 		apiClient.subscribeToTasks(onMessage),
 
+	getDirs: () => apiClient.getDirs(),
+	createDir: (request: DirPresetForm) => apiClient.createDir(request),
+	updateDir: (id: number, request: DirPresetForm) => apiClient.updateDir(id, request),
+	deleteDir: (id: number) => apiClient.deleteDir(id),
+	wizardResolve: (url: string) => apiClient.wizardResolve(url),
+	wizardSubscribe: (request: WizardSubscribeRequest) => apiClient.wizardSubscribe(request),
+	downloadVideo: (request: { bvid: string; dir_id: number; follow_new?: boolean }) =>
+		apiClient.downloadVideo(request),
+	backfillUpperNames: () => apiClient.backfillUpperNames(),
 	setAuthToken: (token: string) => apiClient.setAuthToken(token),
 	getAuthToken: () => apiClient.getAuthToken(),
 	clearAuthToken: () => apiClient.clearAuthToken()

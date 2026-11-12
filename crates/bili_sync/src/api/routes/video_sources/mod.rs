@@ -11,8 +11,10 @@ use bili_sync_migration::Expr;
 use futures::stream::FuturesUnordered;
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
+use serde::Deserialize;
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
+use sea_orm::IntoActiveModel;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QuerySelect, QueryTrait, TransactionTrait};
 
 use crate::adapter::{_ActiveModel, VideoSource as _, VideoSourceEnum};
@@ -42,6 +44,9 @@ pub(super) fn router() -> Router {
             "/video-sources/{type}/{id}",
             put(update_video_source).delete(remove_video_source),
         )
+        .route("/video-sources/backfill-upper", post(backfill_upper_names))
+        .route("/video-sources/{type}/{id}/schedule", put(update_schedule))
+        .route("/video-sources/{type}/{id}/run", post(run_video_source))
         .route("/video-sources/{type}/{id}/evaluate", post(evaluate_video_source))
         .route("/video-sources/{type}/{id}/full-sync", post(full_sync_video_source))
         .route("/video-sources/favorites", post(insert_favorite))
@@ -106,8 +111,19 @@ pub async fn get_video_sources_details(
                 collection::Column::Rule,
                 collection::Column::FilterOption,
                 collection::Column::Enabled,
-                collection::Column::LatestRowAt
+                collection::Column::LatestRowAt,
+                collection::Column::UpperName,
+                collection::Column::ScheduleMode,
+                collection::Column::IntervalSeconds,
+                collection::Column::CronExpr,
+                collection::Column::NextRunAt,
+                collection::Column::LastCheckedAt,
+                collection::Column::LastFoundCount,
+                collection::Column::FailCount,
+                collection::Column::MaxDays,
+                collection::Column::MaxPages
             ])
+            .column_as(collection::Column::MId, "mid")
             .into_model::<VideoSourceDetail>()
             .all(&db),
         favorite::Entity::find()
@@ -119,7 +135,16 @@ pub async fn get_video_sources_details(
                 favorite::Column::Rule,
                 favorite::Column::FilterOption,
                 favorite::Column::Enabled,
-                favorite::Column::LatestRowAt
+                favorite::Column::LatestRowAt,
+                favorite::Column::ScheduleMode,
+                favorite::Column::IntervalSeconds,
+                favorite::Column::CronExpr,
+                favorite::Column::NextRunAt,
+                favorite::Column::LastCheckedAt,
+                favorite::Column::LastFoundCount,
+                favorite::Column::FailCount,
+                favorite::Column::MaxDays,
+                favorite::Column::MaxPages
             ])
             .into_model::<VideoSourceDetail>()
             .all(&db),
@@ -133,8 +158,19 @@ pub async fn get_video_sources_details(
                 submission::Column::Rule,
                 submission::Column::FilterOption,
                 submission::Column::UseDynamicApi,
-                submission::Column::LatestRowAt
+                submission::Column::LatestRowAt,
+                submission::Column::UpperName,
+                submission::Column::ScheduleMode,
+                submission::Column::IntervalSeconds,
+                submission::Column::CronExpr,
+                submission::Column::NextRunAt,
+                submission::Column::LastCheckedAt,
+                submission::Column::LastFoundCount,
+                submission::Column::FailCount,
+                submission::Column::MaxDays,
+                submission::Column::MaxPages
             ])
+            .column_as(submission::Column::UpperId, "mid")
             .into_model::<VideoSourceDetail>()
             .all(&db),
         watch_later::Entity::find()
@@ -146,7 +182,16 @@ pub async fn get_video_sources_details(
                 watch_later::Column::Enabled,
                 watch_later::Column::Rule,
                 watch_later::Column::FilterOption,
-                watch_later::Column::LatestRowAt
+                watch_later::Column::LatestRowAt,
+                watch_later::Column::ScheduleMode,
+                watch_later::Column::IntervalSeconds,
+                watch_later::Column::CronExpr,
+                watch_later::Column::NextRunAt,
+                watch_later::Column::LastCheckedAt,
+                watch_later::Column::LastFoundCount,
+                watch_later::Column::FailCount,
+                watch_later::Column::MaxDays,
+                watch_later::Column::MaxPages
             ])
             .into_model::<VideoSourceDetail>()
             .all(&db)
@@ -162,6 +207,17 @@ pub async fn get_video_sources_details(
             use_dynamic_api: None,
             enabled: false,
             latest_row_at: None,
+            mid: None,
+            upper_name: None,
+            schedule_mode: "inherit".to_owned(),
+            interval_seconds: 0,
+            cron_expr: String::new(),
+            next_run_at: None,
+            last_checked_at: None,
+            last_found_count: 0,
+            fail_count: 0,
+            max_days: 0,
+            max_pages: 0,
         })
     }
     for sources in [&mut collections, &mut favorites, &mut submissions, &mut watch_later] {
@@ -496,6 +552,11 @@ pub async fn insert_collection(
         credential,
     );
     let collection_info = collection.get_info().await?;
+    let upper_name = Submission::new(bili_client.as_ref(), collection_info.mid.to_string(), credential)
+        .get_info()
+        .await
+        .map(|u| u.name)
+        .unwrap_or_default();
     collection::Entity::insert(collection::ActiveModel {
         s_id: Set(collection_info.sid),
         m_id: Set(collection_info.mid),
@@ -503,6 +564,7 @@ pub async fn insert_collection(
         name: Set(collection_info.name.clone()),
         path: Set(request.path),
         enabled: Set(false),
+        upper_name: Set(upper_name),
         ..Default::default()
     })
     .exec(&db)
@@ -529,5 +591,108 @@ pub async fn insert_submission(
     })
     .exec(&db)
     .await?;
+    Ok(ApiResponse::ok(true))
+}
+
+/// 立即执行某个订阅：拉取新视频 → 写库 → 下载（等价于对该订阅跑一轮完整流程）
+pub async fn run_video_source(
+    Path((source_type, id)): Path<(String, i32)>,
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(bili_client): Extension<Arc<BiliClient>>,
+) -> Result<ApiResponse<bool>, ApiError> {
+    let video_source: Option<VideoSourceEnum> = match source_type.as_str() {
+        "collections" => collection::Entity::find_by_id(id).one(&db).await?.map(Into::into),
+        "favorites" => favorite::Entity::find_by_id(id).one(&db).await?.map(Into::into),
+        "submissions" => submission::Entity::find_by_id(id).one(&db).await?.map(Into::into),
+        "watch_later" => watch_later::Entity::find_by_id(id).one(&db).await?.map(Into::into),
+        _ => return Err(InnerApiError::BadRequest("Invalid video source type".to_string()).into()),
+    };
+    let Some(video_source) = video_source else {
+        return Err(InnerApiError::NotFound(id).into());
+    };
+    let config = VersionedConfig::get().snapshot();
+    let template = TEMPLATE.read();
+    crate::workflow::process_video_source(video_source, bili_client.as_ref(), &db, &template, &config).await?;
+    Ok(ApiResponse::ok(true))
+}
+
+/// 补全历史订阅缺失的 UP 名（二开新增）
+pub async fn backfill_upper_names(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(bili_client): Extension<Arc<BiliClient>>,
+) -> Result<ApiResponse<usize>, ApiError> {
+    let credential = &VersionedConfig::get().read().credential;
+    let rows = collection::Entity::find()
+        .filter(collection::Column::UpperName.eq(""))
+        .all(&db)
+        .await?;
+    let mut fixed = 0usize;
+    for model in rows {
+        if let Ok(upper) = Submission::new(bili_client.as_ref(), model.m_id.to_string(), credential)
+            .get_info()
+            .await
+        {
+            let mut active = model.into_active_model();
+            active.upper_name = Set(upper.name);
+            active.update(&db).await?;
+            fixed += 1;
+        }
+    }
+    info!("已补全 {} 个订阅的 UP 名", fixed);
+    Ok(ApiResponse::ok(fixed))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ScheduleForm {
+    /// inherit / interval / cron / disabled
+    pub schedule_mode: String,
+    #[serde(default)]
+    pub interval_seconds: i32,
+    #[serde(default)]
+    pub cron_expr: String,
+    #[serde(default)]
+    pub max_days: i32,
+    #[serde(default)]
+    pub max_pages: i32,
+}
+
+/// 更新订阅的刷新调度与刷新规则（二开新增）
+pub async fn update_schedule(
+    Path((source_type, id)): Path<(String, i32)>,
+    Extension(db): Extension<DatabaseConnection>,
+    Json(form): Json<ScheduleForm>,
+) -> Result<ApiResponse<bool>, ApiError> {
+    let table = match source_type.as_str() {
+        "collections" => "collection",
+        "favorites" => "favorite",
+        "submissions" => "submission",
+        "watch_later" => "watch_later",
+        _ => return Err(InnerApiError::BadRequest("Invalid video source type".to_string()).into()),
+    };
+    let mode = form.schedule_mode.trim();
+    if !crate::utils::schedule::MODES.contains(&mode) {
+        return Err(InnerApiError::BadRequest(format!("不支持的调度模式：{mode}")).into());
+    }
+    let next_run = crate::utils::schedule::next_run_at(mode, form.interval_seconds, &form.cron_expr)?;
+
+    let sql = format!(
+        "UPDATE {table} SET schedule_mode = ?, interval_seconds = ?, cron_expr = ?, next_run_at = ?, \
+         max_days = ?, max_pages = ? WHERE id = ?"
+    );
+    let stmt = sea_orm::Statement::from_sql_and_values(
+        db.get_database_backend(),
+        sql,
+        [
+            sea_orm::Value::from(mode),
+            sea_orm::Value::from(form.interval_seconds),
+            sea_orm::Value::from(form.cron_expr.trim()),
+            sea_orm::Value::from(next_run),
+            sea_orm::Value::from(form.max_days),
+            sea_orm::Value::from(form.max_pages),
+            sea_orm::Value::from(id),
+        ],
+    );
+    db.execute(stmt).await?;
+    info!("订阅 {table}#{id} 调度已更新：mode={mode} next_run={next_run:?}");
     Ok(ApiResponse::ok(true))
 }

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use sea_orm::DatabaseConnection;
+use sea_orm::{DatabaseConnection, EntityTrait};
 use serde::Serialize;
 use tokio::sync::{OnceCell, watch};
 use tokio_cron_scheduler::{Job, JobScheduler};
@@ -12,6 +12,7 @@ use crate::adapter::VideoSource;
 use crate::bilibili::{self, BiliClient, BiliError};
 use crate::config::{ARGS, Config, TEMPLATE, Trigger, VersionedConfig};
 use crate::utils::model::get_enabled_video_sources;
+use crate::utils::schedule::next_run_at;
 use crate::utils::notify::error_and_notify;
 use crate::workflow::process_video_source;
 
@@ -146,6 +147,15 @@ impl DownloadTaskManager {
             }
         };
         *cx.video_task_id.lock().await = video_task_id;
+        // 二开：订阅级调度（每分钟检查一次是否有到期的订阅需要单独刷新）
+        sched
+            .lock()
+            .await
+            .add(Job::new_repeated_async(
+                Duration::from_secs(60),
+                subscription_schedule_task(cx.clone()),
+            )?)
+            .await?;
         // 发起一个一次性的任务，更新一下下次运行的时间
         if let Some(video_task_id) = video_task_id {
             sched
@@ -357,8 +367,15 @@ async fn download_video(
     if video_sources.is_empty() {
         bail!("没有可用的视频源");
     }
+    let mut processed = 0usize;
     for video_source in video_sources {
+        processed += 1;
         let display_name = video_source.display_name();
+        crate::utils::notify::notify(
+            config,
+            &bili_client,
+            format!("🔍 开始处理订阅：{}", video_source.display_name()),
+        );
         if let Err(e) = process_video_source(video_source, &bili_client, connection, &template, config).await {
             error_and_notify(
                 config,
@@ -374,5 +391,187 @@ async fn download_video(
             }
         }
     }
+    crate::utils::notify::notify(
+        config,
+        &bili_client,
+        format!("✅ 本轮订阅检查完成，共处理 {} 个视频源", processed),
+    );
+    Ok(())
+}
+
+/// 每分钟检查一次：有没有「按间隔 / 按 cron」到期的订阅需要单独刷新
+fn subscription_schedule_task(
+    cx: Arc<TaskContext>,
+) -> impl FnMut(uuid::Uuid, JobScheduler) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+    move |_uuid, _l| {
+        let cx = cx.clone();
+        Box::pin(async move {
+            if let Err(e) = tick_due_subscriptions(&cx).await {
+                error!("订阅调度任务出错：{:#}", e);
+            }
+        })
+    }
+}
+
+/// 单订阅的表名与实体类型
+const SCHEDULE_TABLES: [&str; 4] = ["collection", "favorite", "submission", "watch_later"];
+
+async fn tick_due_subscriptions(cx: &TaskContext) -> Result<()> {
+    use sea_orm::{ConnectionTrait, Statement, Value};
+
+    let config = VersionedConfig::get().snapshot();
+    let template = TEMPLATE.read();
+    let client = cx.bili_client.snapshot()?;
+    let now = chrono::Local::now().naive_local();
+
+    for table in SCHEDULE_TABLES {
+        let sql = format!(
+            "SELECT id FROM {table} WHERE enabled = 1 AND schedule_mode IN ('interval', 'cron') \
+             AND (next_run_at IS NULL OR next_run_at <= ?)"
+        );
+        let stmt = Statement::from_sql_and_values(
+            cx.connection.get_database_backend(),
+            sql,
+            [Value::from(now)],
+        );
+        let rows = cx.connection.query_all(stmt).await?;
+        let mut ids = Vec::new();
+        for row in rows {
+            if let Ok(id) = row.try_get::<i32>("", "id") {
+                ids.push(id);
+            }
+        }
+        for id in ids {
+            let Some(source) = load_video_source(&cx.connection, table, id).await? else {
+                continue;
+            };
+            let source_name = source.display_name().to_string();
+            info!("按订阅调度刷新：{}", source_name);
+            match process_video_source(source, &client, &cx.connection, &template, &config).await {
+                Ok(_) => {
+                    info!("订阅刷新完成：{}", source_name);
+                    finish_tick(&cx.connection, table, id, now, true).await?;
+                    apply_max_days(&cx.connection, table, id).await?;
+                }
+                Err(e) => {
+                    error!("订阅刷新失败：{}：{:#}", source_name, e);
+                    finish_tick(&cx.connection, table, id, now, false).await?;
+                    // 连续失败 3 次发通知
+                    let fails = current_fail_count(&cx.connection, table, id).await?;
+                    if fails > 0 && fails % 3 == 0 {
+                        let msg = format!("订阅「{}」已连续失败 {} 次，最近错误：{:#}", source_name, fails, e);
+                        crate::utils::notify::notify(&config, &client, msg);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn load_video_source(
+    db: &DatabaseConnection,
+    table: &str,
+    id: i32,
+) -> Result<Option<crate::adapter::VideoSourceEnum>> {
+    use bili_sync_entity::*;
+    let source = match table {
+        "collection" => collection::Entity::find_by_id(id).one(db).await?.map(Into::into),
+        "favorite" => favorite::Entity::find_by_id(id).one(db).await?.map(Into::into),
+        "submission" => submission::Entity::find_by_id(id).one(db).await?.map(Into::into),
+        "watch_later" => watch_later::Entity::find_by_id(id).one(db).await?.map(Into::into),
+        _ => None,
+    };
+    Ok(source)
+}
+
+/// 更新上次检查时间、失败计数与下次运行时间
+async fn finish_tick(
+    db: &DatabaseConnection,
+    table: &str,
+    id: i32,
+    now: chrono::NaiveDateTime,
+    success: bool,
+) -> Result<()> {
+    use sea_orm::{ConnectionTrait, Statement, Value};
+
+    let stmt = Statement::from_sql_and_values(
+        db.get_database_backend(),
+        format!("SELECT schedule_mode, interval_seconds, cron_expr FROM {table} WHERE id = ?"),
+        [Value::from(id)],
+    );
+    let Some(row) = db.query_one(stmt).await? else {
+        return Ok(());
+    };
+    let mode: String = row.try_get("", "schedule_mode").unwrap_or_else(|_| "inherit".to_owned());
+    let interval: i32 = row.try_get("", "interval_seconds").unwrap_or(0);
+    let cron: String = row.try_get("", "cron_expr").unwrap_or_default();
+    let next = next_run_at(&mode, interval.max(300), &cron).unwrap_or(None);
+
+    let fail_sql = if success {
+        String::from("fail_count = 0,")
+    } else {
+        String::from("fail_count = fail_count + 1,")
+    };
+    let sql = format!(
+        "UPDATE {table} SET last_checked_at = ?, {fail_sql} next_run_at = ? WHERE id = ?"
+    );
+    let stmt = Statement::from_sql_and_values(
+        db.get_database_backend(),
+        sql,
+        [Value::from(now), Value::from(next), Value::from(id)],
+    );
+    db.execute(stmt).await?;
+    Ok(())
+}
+
+async fn current_fail_count(db: &DatabaseConnection, table: &str, id: i32) -> Result<i64> {
+    use sea_orm::{ConnectionTrait, Statement, Value};
+    let stmt = Statement::from_sql_and_values(
+        db.get_database_backend(),
+        format!("SELECT fail_count FROM {table} WHERE id = ?"),
+        [Value::from(id)],
+    );
+    let value = db
+        .query_one(stmt)
+        .await?
+        .and_then(|row| row.try_get::<i32>("", "fail_count").ok())
+        .unwrap_or(0);
+    Ok(value as i64)
+}
+
+/// 刷新规则：只看最近 N 天（0 表示不限）——超期视频标记为不下载
+async fn apply_max_days(db: &DatabaseConnection, table: &str, id: i32) -> Result<()> {
+    use sea_orm::{ConnectionTrait, Statement, Value};
+
+    let stmt = Statement::from_sql_and_values(
+        db.get_database_backend(),
+        format!("SELECT max_days FROM {table} WHERE id = ?"),
+        [Value::from(id)],
+    );
+    let max_days = db
+        .query_one(stmt)
+        .await?
+        .and_then(|row| row.try_get::<i32>("", "max_days").ok())
+        .unwrap_or(0);
+    if max_days <= 0 {
+        return Ok(());
+    }
+    let cutoff = chrono::Local::now().naive_local() - chrono::Duration::days(max_days as i64);
+    let fk = match table {
+        "collection" => "collection_id",
+        "favorite" => "favorite_id",
+        "submission" => "submission_id",
+        _ => "watch_later_id",
+    };
+    let sql = format!(
+        "UPDATE video SET should_download = 0 WHERE {fk} = ? AND download_status = 0 AND pubtime < ?"
+    );
+    let stmt = Statement::from_sql_and_values(
+        db.get_database_backend(),
+        sql,
+        [Value::from(id), Value::from(cutoff)],
+    );
+    db.execute(stmt).await?;
     Ok(())
 }

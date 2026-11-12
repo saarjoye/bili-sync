@@ -16,7 +16,8 @@
 	import HeartIcon from '@lucide/svelte/icons/heart';
 	import InfoIcon from '@lucide/svelte/icons/info';
 	import PlusIcon from '@lucide/svelte/icons/plus';
-	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
+	import PlayIcon from '@lucide/svelte/icons/play';
+import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import SquarePenIcon from '@lucide/svelte/icons/square-pen';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import UserIcon from '@lucide/svelte/icons/user';
@@ -80,12 +81,44 @@
 		path: '',
 		enabled: false,
 		rule: null as Rule | null,
-		useDynamicApi: null as boolean | null
+		useDynamicApi: null as boolean | null,
+		// 二开：刷新调度与规则
+		scheduleMode: 'inherit',
+		intervalMinutes: 60,
+		cronExpr: '',
+		maxDays: 0
 	};
 
 	// 表单数据
 	let favoriteForm = { fid: '', path: '' };
 	let collectionForm = { sid: '', mid: '', collection_type: '2', path: '' }; // 默认为合集
+
+	// 立即执行中的订阅 id（用于禁用按钮）
+	let runningId: number | null = null;
+
+	async function backfillUpper() {
+		try {
+			const res = await api.backfillUpperNames();
+			toast.success(`已补全 ${res.data ?? 0} 个订阅的 UP 名`);
+			await loadVideoSources();
+		} catch (e: any) {
+			toast.error('补全失败', { description: e?.message ?? String(e) });
+		}
+	}
+
+	async function runSource(type: string, source: { id: number; name?: string }) {
+		runningId = source.id;
+		try {
+			await api.runVideoSource(type, source.id);
+			toast.success(`已触发：${source.name ?? source.id}`, {
+				description: '正在检查新视频并下载，进度见「日志」页'
+			});
+		} catch (e: any) {
+			toast.error('触发失败', { description: e?.message ?? String(e) });
+		} finally {
+			runningId = null;
+		}
+	}
 	let submissionForm = { upper_id: '', path: '' };
 
 	const TAB_CONFIG = {
@@ -198,6 +231,13 @@
 				useDynamicApi: editForm.useDynamicApi,
 				filterOption: useCustomFilterOption ? editFilterOption : null
 			});
+			// 二开：保存刷新调度与规则
+			await api.updateSchedule(editingType, editingSource.id, {
+				schedule_mode: editForm.scheduleMode,
+				interval_seconds: editForm.scheduleMode === 'interval' ? editForm.intervalMinutes * 60 : 0,
+				cron_expr: editForm.scheduleMode === 'cron' ? editForm.cronExpr : '',
+				max_days: editForm.maxDays
+			});
 			// 更新本地数据
 			if (videoSourcesData && editingSource) {
 				const sources = videoSourcesData[
@@ -210,7 +250,11 @@
 					rule: editForm.rule,
 					useDynamicApi: editForm.useDynamicApi,
 					filterOption: useCustomFilterOption ? structuredClone(editFilterOption) : null,
-					ruleDisplay: response.data.ruleDisplay
+					ruleDisplay: response.data.ruleDisplay,
+					scheduleMode: editForm.scheduleMode,
+					intervalSeconds: editForm.scheduleMode === 'interval' ? editForm.intervalMinutes * 60 : 0,
+					cronExpr: editForm.scheduleMode === 'cron' ? editForm.cronExpr : '',
+					maxDays: editForm.maxDays
 				};
 				videoSourcesData = { ...videoSourcesData };
 			}
@@ -369,10 +413,17 @@
 					<div class="mb-4 flex items-center justify-between">
 						<div></div>
 						{#if key === 'favorites' || key === 'collections' || key === 'submissions'}
-							<Button size="sm" onclick={() => openAddDialog(key)} class="flex items-center gap-2">
-								<PlusIcon class="h-4 w-4" />
-								手动添加
-							</Button>
+							<div class="flex items-center gap-2">
+								{#if key === 'collections'}
+									<Button size="sm" variant="outline" onclick={backfillUpper} class="flex items-center gap-2">
+										补全 UP 名
+									</Button>
+								{/if}
+								<Button size="sm" onclick={() => openAddDialog(key)} class="flex items-center gap-2">
+									<PlusIcon class="h-4 w-4" />
+									手动添加
+								</Button>
+							</div>
 						{/if}
 					</div>
 					{#if sources.length > 0}
@@ -380,10 +431,11 @@
 							<Table.Root>
 								<Table.Header>
 									<Table.Row>
-										<Table.Head class="w-[20%]">名称</Table.Head>
-										<Table.Head class="w-[30%]">下载路径</Table.Head>
+										<Table.Head class="w-[18%]">名称</Table.Head>
+										<Table.Head class="w-[14%]">UP 主</Table.Head>
+										<Table.Head class="w-[28%]">下载路径</Table.Head>
 										<Table.Head class="w-[15%]">最新视频时间</Table.Head>
-										<Table.Head class="w-[15%]">过滤规则</Table.Head>
+										<Table.Head class="w-[12%]">过滤规则</Table.Head>
 										<Table.Head class="w-[10%]">启用状态</Table.Head>
 										<Table.Head class="w-[10%] text-right">操作</Table.Head>
 									</Table.Row>
@@ -391,7 +443,24 @@
 								<Table.Body>
 									{#each sources as source, index (index)}
 										<Table.Row>
-											<Table.Cell class="font-medium">{source.name}</Table.Cell>
+											<Table.Cell class="text-muted-foreground text-xs">
+												{#if source.upperName || source.mid}
+													<span class="block truncate">
+														{source.upperName || "-"}
+													</span>
+													<span class="text-[10px]">{source.mid ?? ""}</span>
+												{:else}
+													-
+												{/if}
+											</Table.Cell>
+											<Table.Cell class="font-medium">
+												<div class="truncate">{source.name}</div>
+												<div class="text-muted-foreground text-[11px]">
+													上次 {source.lastCheckedAt ? new Date(source.lastCheckedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '-'}
+													｜下次 {source.nextRunAt ? new Date(source.nextRunAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : (source.scheduleMode === 'inherit' ? '跟随全局' : '-')}
+													{#if source.lastFoundCount && source.lastFoundCount > 0}｜<span class="text-emerald-600">+{source.lastFoundCount}</span>{/if}
+												</div>
+											</Table.Cell>
 											<Table.Cell>
 												<div
 													class="bg-secondary hover:bg-secondary/80 flex w-fit cursor-text items-center gap-2 rounded-md px-2.5 py-1.5 transition-colors"
@@ -455,6 +524,22 @@
 											</Table.Cell>
 
 											<Table.Cell class="text-right">
+												<Tooltip.Root disableHoverableContent={true}>
+													<Tooltip.Trigger>
+														<Button
+															size="sm"
+															variant="outline"
+															onclick={() => runSource(key, source)}
+															disabled={runningId === source.id}
+															class="h-8 w-8 p-0"
+														>
+															<PlayIcon class="h-3 w-3" />
+														</Button>
+													</Tooltip.Trigger>
+													<Tooltip.Content>
+														<p class="text-xs">立即执行（检查并下载）</p>
+													</Tooltip.Content>
+												</Tooltip.Root>
 												<Tooltip.Root disableHoverableContent={true}>
 													<Tooltip.Trigger>
 														<Button

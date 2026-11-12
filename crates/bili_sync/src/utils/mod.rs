@@ -1,3 +1,5 @@
+pub mod schedule;
+pub mod episode;
 pub mod convert;
 pub mod danmaku_schedule;
 pub mod download_context;

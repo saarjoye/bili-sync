@@ -33,6 +33,17 @@ pub enum Notifier {
         // 一个内部辅助字段，用于决定是否强制渲染当前模板，在测试时使用
         ignore_cache: Option<()>,
     },
+    /// 企业微信「应用消息」；base_url 可指向自建反代
+    WeCom {
+        #[serde(default = "default_wecom_base")]
+        base_url: String,
+        corp_id: String,
+        agent_id: i64,
+        secret: String,
+        /// @all 或 userid1|userid2
+        #[serde(default = "default_wecom_to")]
+        to_user: String,
+    },
     Smtp {
         host: String,
         port: u16,
@@ -44,6 +55,14 @@ pub enum Notifier {
         from: String,
         to: String,
     },
+}
+
+pub fn default_wecom_base() -> String {
+    "https://qyapi.weixin.qq.com".to_owned()
+}
+
+pub fn default_wecom_to() -> String {
+    "@all".to_owned()
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -131,6 +150,43 @@ impl Notifier {
                 }
 
                 client.post(url).headers(headers_map).body(payload).send().await?;
+            }
+            Notifier::WeCom {
+                base_url,
+                corp_id,
+                agent_id,
+                secret,
+                to_user,
+            } => {
+                let base = base_url.trim_end_matches('/');
+                let token_resp: serde_json::Value = client
+                    .get(format!("{base}/cgi-bin/gettoken"))
+                    .query(&[("corpid", corp_id.as_str()), ("corpsecret", secret.as_str())])
+                    .send()
+                    .await?
+                    .json()
+                    .await?;
+                let Some(token) = token_resp.get("access_token").and_then(|v| v.as_str()) else {
+                    return Err(anyhow!("企业微信获取 access_token 失败：{token_resp}"));
+                };
+                let payload = serde_json::json!({
+                    "touser": to_user,
+                    "msgtype": "text",
+                    "agentid": agent_id,
+                    "text": { "content": message.message.as_ref() },
+                    "safe": 0,
+                });
+                let resp: serde_json::Value = client
+                    .post(format!("{base}/cgi-bin/message/send"))
+                    .query(&[("access_token", token)])
+                    .json(&payload)
+                    .send()
+                    .await?
+                    .json()
+                    .await?;
+                if resp.get("errcode").and_then(|v| v.as_i64()).unwrap_or(-1) != 0 {
+                    return Err(anyhow!("企业微信发送失败：{resp}"));
+                }
             }
             Notifier::Smtp {
                 host,

@@ -9,6 +9,8 @@
 	import Settings2Icon from '@lucide/svelte/icons/settings-2';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import UserIcon from '@lucide/svelte/icons/user';
+import WandSparklesIcon from '@lucide/svelte/icons/wand-sparkles';
+import FolderTreeIcon from '@lucide/svelte/icons/folder-tree';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
 	import { mode, toggleMode } from 'mode-watcher';
 	import type { ComponentProps } from 'svelte';
@@ -52,6 +54,16 @@
 						title: '视频源',
 						icon: DatabaseIcon,
 						href: '/video-sources'
+					},
+					{
+						title: '订阅向导',
+						icon: WandSparklesIcon,
+						href: '/wizard'
+					},
+					{
+						title: '目录',
+						icon: FolderTreeIcon,
+						href: '/dirs'
 					}
 				]
 			},

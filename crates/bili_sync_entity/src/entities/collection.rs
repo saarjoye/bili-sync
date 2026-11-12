@@ -19,6 +19,19 @@ pub struct Model {
     pub rule: Option<Rule>,
     pub filter_option: Option<Json>,
     pub enabled: bool,
+    // upstream owner name (fork addition)
+    pub upper_name: String,
+    // schedule: inherit / interval / cron / disabled
+    pub schedule_mode: String,
+    pub interval_seconds: i32,
+    pub cron_expr: String,
+    pub next_run_at: Option<DateTime>,
+    pub last_checked_at: Option<DateTime>,
+    pub last_found_count: i32,
+    pub fail_count: i32,
+    // refresh rules: 0 means unlimited
+    pub max_days: i32,
+    pub max_pages: i32,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

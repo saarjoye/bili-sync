@@ -15,6 +15,18 @@ pub struct Model {
     pub rule: Option<Rule>,
     pub filter_option: Option<Json>,
     pub enabled: bool,
+    /// inherit / interval / cron / disabled
+    pub schedule_mode: String,
+    pub interval_seconds: i32,
+    pub cron_expr: String,
+    pub next_run_at: Option<DateTime>,
+    pub last_checked_at: Option<DateTime>,
+    pub last_found_count: i32,
+    pub fail_count: i32,
+    /// 只看最近 N 天发布的视频（0 = 不限）
+    pub max_days: i32,
+    /// 最多抓取 N 页（0 = 不限）
+    pub max_pages: i32,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

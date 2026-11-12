@@ -221,6 +221,31 @@ pub struct VideoSourceDetail {
     pub use_dynamic_api: Option<bool>,
     pub enabled: bool,
     pub latest_row_at: Option<DateTime>,
+    /// UP 主 ID（合集=合集归属 UP，投稿=投稿 UP）
+    #[serde(default)]
+    pub mid: Option<i64>,
+    /// UP 主名称（合集从已入库视频里取，投稿直接取订阅名）
+    #[serde(default)]
+    pub upper_name: Option<String>,
+    /// 调度：inherit / interval / cron / disabled
+    #[serde(default)]
+    pub schedule_mode: String,
+    #[serde(default)]
+    pub interval_seconds: i32,
+    #[serde(default)]
+    pub cron_expr: String,
+    pub next_run_at: Option<DateTime>,
+    pub last_checked_at: Option<DateTime>,
+    #[serde(default)]
+    pub last_found_count: i32,
+    #[serde(default)]
+    pub fail_count: i32,
+    /// 只看最近 N 天（0=不限）
+    #[serde(default)]
+    pub max_days: i32,
+    /// 最多抓 N 页（0=不限）
+    #[serde(default)]
+    pub max_pages: i32,
 }
 
 #[derive(Serialize)]

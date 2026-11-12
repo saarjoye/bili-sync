@@ -5,7 +5,7 @@
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
 	import { toast } from 'svelte-sonner';
-	import type { Notifier, SmtpNotifier } from '$lib/types';
+	import type { Notifier, SmtpNotifier, WeComNotifier } from '$lib/types';
 
 	export let notifier: Notifier | null = null;
 	export let onSave: (notifier: Notifier) => void;
@@ -25,6 +25,12 @@
 	let smtpPassword = '';
 	let smtpFrom = '';
 	let smtpTo = '';
+	// 企业微信应用消息
+	let wecomBase = 'https://qyapi.weixin.qq.com';
+	let wecomCorpId = '';
+	let wecomAgentId: number | undefined = undefined;
+	let wecomSecret = '';
+	let wecomTo = '@all';
 
 	// 初始化表单
 	$: {
@@ -43,6 +49,13 @@
 				} else {
 					webhookHeaders = [];
 				}
+			} else if (notifier.type === 'wecom') {
+				type = 'wecom';
+				wecomBase = notifier.base_url || 'https://qyapi.weixin.qq.com';
+				wecomCorpId = notifier.corp_id;
+				wecomAgentId = notifier.agent_id;
+				wecomSecret = notifier.secret;
+				wecomTo = notifier.to_user || '@all';
 			} else {
 				type = 'smtp';
 				smtpHost = notifier.host;
@@ -68,6 +81,11 @@
 			smtpPassword = '';
 			smtpFrom = '';
 			smtpTo = '';
+			wecomBase = 'https://qyapi.weixin.qq.com';
+			wecomCorpId = '';
+			wecomAgentId = undefined;
+			wecomSecret = '';
+			wecomTo = '@all';
 		}
 	}
 
@@ -88,6 +106,20 @@
 				chat_id: chatId.trim(),
 				skip_image: skipImage
 			};
+			onSave(newNotifier);
+		} else if (type === 'wecom') {
+			if (!wecomCorpId.trim() || !wecomSecret.trim() || !wecomAgentId) {
+				toast.error('请填写 corpid、secret 与 agentid');
+				return;
+			}
+			const newNotifier: Notifier = {
+				type: 'wecom',
+				base_url: (wecomBase.trim() || 'https://qyapi.weixin.qq.com').replace(/\/+$/, ''),
+				corp_id: wecomCorpId.trim(),
+				agent_id: Number(wecomAgentId),
+				secret: wecomSecret.trim(),
+				to_user: (wecomTo.trim() || '@all')
+			} as WeComNotifier;
 			onSave(newNotifier);
 		} else if (type === 'webhook') {
 			if (!webhookUrl.trim()) {
@@ -163,6 +195,7 @@
 			<option value="telegram">Telegram Bot</option>
 			<option value="webhook">Webhook</option>
 			<option value="smtp">SMTP 邮件</option>
+			<option value="wecom">企业微信应用消息</option>
 		</select>
 	</div>
 
@@ -242,6 +275,33 @@
 			<p class="text-muted-foreground text-xs">
 				添加自定义请求头，例如：Authorization: Bearer your_token
 			</p>
+		</div>
+	{:else if type === 'wecom'}
+		<div class="space-y-2">
+			<Label for="wecom-base">接口基地址（可填自建反代）</Label>
+			<Input id="wecom-base" placeholder="https://qyapi.weixin.qq.com" bind:value={wecomBase} />
+			<p class="text-muted-foreground text-xs">
+				最终会拼成 <code class="text-xs">{wecomBase}/cgi-bin/gettoken</code> 与
+				<code class="text-xs">{wecomBase}/cgi-bin/message/send</code>
+			</p>
+		</div>
+		<div class="space-y-2">
+			<Label for="wecom-corp">企业 ID（corpid）</Label>
+			<Input id="wecom-corp" placeholder="wwxxxxxxxxxxxxxxxx" bind:value={wecomCorpId} />
+		</div>
+		<div class="grid grid-cols-2 gap-4">
+			<div class="space-y-2">
+				<Label for="wecom-agent">应用 AgentId</Label>
+				<Input id="wecom-agent" type="number" placeholder="1000002" bind:value={wecomAgentId} />
+			</div>
+			<div class="space-y-2">
+				<Label for="wecom-to">接收人</Label>
+				<Input id="wecom-to" placeholder="@all 或 userid1|userid2" bind:value={wecomTo} />
+			</div>
+		</div>
+		<div class="space-y-2">
+			<Label for="wecom-secret">应用 Secret</Label>
+			<PasswordInput id="wecom-secret" placeholder="应用管理里的 Secret" bind:value={wecomSecret} />
 		</div>
 	{:else if type === 'smtp'}
 		<div class="space-y-2">

@@ -1,6 +1,6 @@
 use axum::extract::Request;
 use axum::middleware::Next;
-use axum::response::{IntoResponse, Redirect, Response};
+use axum::response::{IntoResponse, Response};
 use axum::{Router, middleware};
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
@@ -10,12 +10,14 @@ use crate::auth;
 use crate::config::VersionedConfig;
 
 mod authapi;
+mod dirs;
 mod config;
 mod dashboard;
 mod login;
 mod me;
 mod task;
 mod video_sources;
+mod wizard;
 mod videos;
 mod ws;
 
@@ -34,16 +36,21 @@ pub fn router() -> Router {
             .merge(task::router())
             // 账号体系接口（登录/初始化/登出/状态），自身不做鉴权
             .merge(authapi::router())
+            .merge(dirs::router())
+            .merge(wizard::router())
             .layer(middleware::from_fn(auth)),
     )
 }
 
 /// 中间件：账号会话优先，其次兼容旧的 auth_token（保持脚本/Webhook 调用可用）
+///
+/// 注意：本中间件挂在 `nest("/api", ..)` 内部，**收到的路径已经被剥掉 `/api` 前缀**
+/// （例如 `/api/dashboard` 在这里看到的是 `/dashboard`），所以这里不能再判断 `/api/` 前缀。
 pub async fn auth(request: Request, next: Next) -> Response {
     let path = request.uri().path().to_owned();
 
-    // 登录相关接口：匿名可访问
-    if path.starts_with("/api/auth/") {
+    // 登录/初始化/登出/状态：匿名可访问
+    if path.starts_with("/auth/") {
         return next.run(request).await;
     }
 
@@ -81,9 +88,6 @@ pub async fn auth(request: Request, next: Next) -> Response {
         return resp;
     }
 
-    // 未登录：API 返回 401，其余（页面）引导到登录页
-    if path.starts_with("/api/") {
-        return ApiResponse::<()>::unauthorized("未登录或会话已过期").into_response();
-    }
-    Redirect::to("/login").into_response()
+    // 未登录：API 一律 401（页面重定向由 http_server 的 frontend_files 负责）
+    ApiResponse::<()>::unauthorized("未登录或会话已过期").into_response()
 }

@@ -232,6 +232,17 @@ export interface VideoSourceDetail {
 	useDynamicApi: boolean | null;
 	enabled: boolean;
 	latestRowAt: string | null;
+	mid?: number | null;
+	upperName?: string | null;
+	scheduleMode?: string;
+	intervalSeconds?: number;
+	cronExpr?: string;
+	nextRunAt?: string | null;
+	lastCheckedAt?: string | null;
+	lastFoundCount?: number;
+	failCount?: number;
+	maxDays?: number;
+	maxPages?: number;
 }
 
 export interface VideoSourcesDetailsResponse {
@@ -333,6 +344,17 @@ export interface WebhookNotifier {
 	headers?: Record<string, string> | null;
 }
 
+export interface WeComNotifier {
+	type: 'wecom';
+	/** 官方地址或自建反代基地址 */
+	base_url: string;
+	corp_id: string;
+	agent_id: number;
+	secret: string;
+	/** @all 或 userid1|userid2 */
+	to_user: string;
+}
+
 export interface SmtpNotifier {
 	type: 'smtp';
 	host: string;
@@ -344,7 +366,7 @@ export interface SmtpNotifier {
 	to: string;
 }
 
-export type Notifier = TelegramNotifier | WebhookNotifier | SmtpNotifier;
+export type Notifier = TelegramNotifier | WebhookNotifier | SmtpNotifier | WeComNotifier;
 
 export type Trigger = number | string;
 

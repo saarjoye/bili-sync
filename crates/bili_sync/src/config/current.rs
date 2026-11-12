@@ -73,9 +73,7 @@ impl Config {
         if !self.upper_path.is_absolute() {
             errors.push("up 主头像保存的路径应为绝对路径");
         }
-        if self.video_name.is_empty() {
-            errors.push("未设置 video_name 模板");
-        }
+        // video_name 允许为空：表示扁平布局（视频文件直接放在订阅目录下）
         if self.page_name.is_empty() {
             errors.push("未设置 page_name 模板");
         }

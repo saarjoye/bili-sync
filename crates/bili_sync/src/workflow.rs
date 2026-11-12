@@ -21,7 +21,8 @@ use crate::error::ExecutionStatus;
 use crate::notifier::DownloadNotifyInfo;
 use crate::utils::danmaku_schedule::should_sync_danmaku;
 use crate::utils::download_context::DownloadContext;
-use crate::utils::format_arg::{page_format_args, video_format_args};
+use crate::utils::episode::{episode_no, season_of};
+use crate::utils::format_arg::{page_format_args_ext, video_format_args_ext};
 use crate::utils::model::{
     create_pages, create_videos, filter_unfilled_videos, filter_unhandled_video_pages, set_video_models_invalid,
     update_pages_model, update_video_detail_models, update_videos_model,
@@ -388,13 +389,21 @@ pub async fn download_video_pages(
     let mut status = VideoStatus::from(video_model.download_status);
     let separate_status = status.should_run();
     // 未记录路径时填充，已经填充过路径时使用现有的
+    // 集号 / 季号（二开）：集号按合集内发布时间排序，季号从订阅名识别
+    let ep = episode_no(cx.connection, &video_model).await.or(Some(1));
+    let season = season_of(&cx.video_source.display_name());
+    let video_args = video_format_args_ext(&video_model, &cx.config.time_format, ep, season.as_deref());
     let base_path = if !video_model.path.is_empty() {
         PathBuf::from(&video_model.path)
     } else {
-        cx.video_source.path().join(
-            cx.template
-                .path_safe_render("video", &video_format_args(&video_model, &cx.config.time_format))?,
-        )
+        let dir_name = cx.template.path_safe_render("video", &video_args)?;
+        let root = cx.video_source.path();
+        // 目录名为空时表示「扁平布局」：文件直接放在订阅目录下
+        if dir_name.trim().is_empty() {
+            root.to_path_buf()
+        } else {
+            root.join(dir_name)
+        }
     };
     fs::create_dir_all(&base_path).await?;
 
@@ -534,6 +543,12 @@ pub async fn dispatch_download_page(
     if let Some(e) = risk_control_related_error {
         bail!(e);
     }
+    // 每个视频处理完成后发一条通知（二开）
+    crate::utils::notify::notify(
+        cx.config,
+        cx.bili_client,
+        format!("✅ 下载完成：{}", video_model.name),
+    );
     // 视频中“分页下载”任务的状态始终与所有分页的最小状态一致
     Ok(ExecutionStatus::Fixed(target_status))
 }
@@ -545,6 +560,10 @@ pub async fn download_page(
     base_path: &Path,
     cx: DownloadContext<'_>,
 ) -> Result<page::ActiveModel> {
+
+    // 集号 / 季号（二开）：下载单个分页时按需计算
+    let ep = episode_no(cx.connection, video_model).await.or(Some(1));
+    let season = season_of(&cx.video_source.display_name());
     let mut status = PageStatus::from(page_model.download_status);
     let separate_status = status.should_run();
     let is_single_page = video_model.single_page.context("single_page is null")?;
@@ -582,7 +601,7 @@ pub async fn download_page(
             base_path,
             cx.template.path_safe_render(
                 "page",
-                &page_format_args(video_model, &page_model, &cx.config.time_format),
+                &page_format_args_ext(video_model, &page_model, &cx.config.time_format, ep, season.as_deref()),
             )?,
         )
     };

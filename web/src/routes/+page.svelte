@@ -22,6 +22,7 @@
 		SysInfo,
 		ApiError,
 		TaskStatus,
+		UploadHourly,
 		UploadStatus
 	} from '$lib/types';
 	import CalendarIcon from '@lucide/svelte/icons/calendar';
@@ -47,45 +48,36 @@
 	let queue = $derived(uploadStatus?.queue);
 	let round = $derived(uploadStatus?.round);
 	let totalVideos = $derived((dashboardData?.videos_by_day ?? []).reduce((s, d) => s + d.cnt, 0));
-	let uploadedDone = $derived(queue?.done ?? 0);
-	let pendingUpload = $derived((queue?.pending ?? 0) + (queue?.waiting ?? 0));
-	let uploadPercent = $derived(queue && queue.total > 0 ? Math.round((uploadedDone / queue.total) * 100) : 0);
-	let rounds = $derived(
-		queue && uploadStatus?.max_per_round
-			? (() => {
-					const perRound = uploadStatus.max_per_round as number;
-					const hours = uploadStatus.interval_seconds ? uploadStatus.interval_seconds / 3600 : 6;
-					const r = Math.ceil(queue.pending / perRound);
-					return { rounds: r, hours: Math.round(r * hours), days: Math.round((r * hours) / 24) };
-				})()
-			: null
+
+	// 口径修正：delete 模式下文件上传后即被删除，queue.done 恒为 0，统计统一改用 totals
+	let totalUploaded = $derived(uploadStatus?.totals?.uploaded ?? 0);
+	let totalDeleted = $derived(uploadStatus?.totals?.deleted ?? 0);
+	let pendingCount = $derived(queue?.pending ?? 0);
+	let waitingCount = $derived(queue?.waiting ?? 0);
+	let failedCount = $derived(queue?.failed ?? 0);
+	let backlog = $derived(pendingCount + waitingCount);
+	let completionPct = $derived(
+		totalUploaded + backlog > 0
+			? Math.round((totalUploaded / (totalUploaded + backlog)) * 1000) / 10
+			: 0
 	);
-	let stages = $derived([
-		{ name: '已下载', value: queue?.total ?? 0, color: ['#5EE6C0', '#2ED3A8'] },
-		{ name: '已上传 115', value: uploadedDone, color: ['#7FB6FF', '#4C8DFF'] },
-		{ name: 'strm 就绪', value: Math.max(0, uploadedDone - (queue?.waiting ?? 0)), color: ['#8FA0FF', '#6C7BFF'] },
-		{ name: '已清理本地', value: uploadedDone, color: ['#FFC97A', '#FFB84D'] }
-	]);
-	// ===== 近 12 小时上传量（uploadStatus.hourly，可能只有 1 条）=====
-	let hourlyList = $derived((uploadStatus?.hourly ?? []).slice(-12));
-	let hourlyGroupMax = $derived(hourlyList.reduce((m, h) => Math.max(m, h.count), 0));
-	let hourlyCap = $derived(uploadStatus?.max_per_hour ?? 0);
-	// 柱高按本组最大值归一；归一基准再与每小时上限取大并留 15% 余量，保证上限虚线不贴顶
-	let hourlyScale = $derived(Math.max(1, Math.max(hourlyGroupMax, hourlyCap) * 1.15));
+	let completionTotal = $derived(totalUploaded + backlog);
 
-	function hourlyBarPct(count: number): number {
-		return Math.max(3, Math.round((count / hourlyScale) * 100));
-	}
+	// 节奏参数
+	let maxPerRound = $derived(uploadStatus?.max_per_round ?? 0);
+	let capPerHour = $derived(uploadStatus?.max_per_hour ?? 0);
+	let uploadedLastHour = $derived(uploadStatus?.uploaded_last_hour ?? 0);
+	let intervalHours = $derived(
+		uploadStatus?.interval_seconds ? Math.round(uploadStatus.interval_seconds / 3600) : 0
+	);
 
-	function hourlyCapPct(): number {
-		if (hourlyCap <= 0) return 0;
-		return Math.min(100, Math.round((hourlyCap / hourlyScale) * 100));
-	}
-
-	function shortHour(label: string): string {
-		const parts = label.split(' ');
-		return parts.length > 1 ? parts[parts.length - 1] : label;
-	}
+	// ETA：待上传集数 ÷ 单轮上限 × 轮周期
+	let etaRounds = $derived(pendingCount > 0 && maxPerRound > 0 ? Math.ceil(pendingCount / maxPerRound) : 0);
+	let etaHours = $derived(etaRounds * (intervalHours > 0 ? intervalHours : 6));
+	let etaText = $derived(etaHours > 48 ? `${Math.round(etaHours / 24)} 天` : `${Math.round(etaHours)} 小时`);
+	let hourPacePct = $derived(
+		capPerHour > 0 ? Math.min(100, Math.round((uploadedLastHour / capPerHour) * 100)) : 0
+	);
 
 	// ===== 目录分布 / 滞留 =====
 	let dirStats = $derived(uploadStatus?.by_dir ?? []);
@@ -94,6 +86,94 @@
 	function segPct(part: number, total: number): number {
 		if (total <= 0) return 0;
 		return Math.round((part / total) * 1000) / 10;
+	}
+
+	// ===== 四段流水线 =====
+	let pipelineStages = $derived([
+		{
+			name: '本地库存（待处理）',
+			value: queue?.total ?? 0,
+			sub: dirStats.length > 0 ? `${dirStats.length} 个目录` : '—',
+			from: '#5EE6C0',
+			to: '#2ED3A8'
+		},
+		{
+			name: '待上传 115',
+			value: pendingCount,
+			sub: `本小时已传 ${uploadedLastHour} / ${capPerHour > 0 ? capPerHour : '-'}`,
+			from: '#7FB6FF',
+			to: '#4C8DFF'
+		},
+		{
+			name: '等 strm 就绪',
+			value: waitingCount,
+			sub: `滞留 ${stuckList.length} 个`,
+			from: '#8FA0FF',
+			to: '#6C7BFF'
+		},
+		{
+			name: '累计已上传',
+			value: totalUploaded,
+			sub: `已清理本地 ${totalDeleted}`,
+			from: '#FFC97A',
+			to: '#FFB84D'
+		}
+	]);
+
+	// ===== 近 12 小时上传量（固定 12 个小时槽，补齐空档；插件 hour_key 为 MM-DD HH:00）=====
+	function hourlySlots(
+		hourly: UploadHourly[] | undefined
+	): { key: string; hour: string; count: number; isNow: boolean }[] {
+		const map = new Map<string, number>(
+			(hourly ?? []).map((h) => [h.hour, h.count] as [string, number])
+		);
+		const now = new Date();
+		const out: { key: string; hour: string; count: number; isNow: boolean }[] = [];
+		const pad = (n: number) => String(n).padStart(2, '0');
+		for (let i = 11; i >= 0; i--) {
+			const t = new Date(now.getTime() - i * 3600000);
+			const key = `${pad(t.getMonth() + 1)}-${pad(t.getDate())} ${pad(t.getHours())}:00`;
+			out.push({ key, hour: pad(t.getHours()), count: map.get(key) ?? 0, isNow: i === 0 });
+		}
+		return out;
+	}
+
+	let hourly12 = $derived(hourlySlots(uploadStatus?.hourly));
+	let hourlyHasData = $derived(hourly12.some((s) => s.count > 0));
+	// 柱高归一基准：本组最大值与每小时上限取大，再留 15% 余量，保证上限虚线不贴顶
+	let hourlyMaxBand = $derived(
+		Math.max(1, Math.max(hourly12.reduce((m, s) => Math.max(m, s.count), 0), capPerHour)) * 1.15
+	);
+
+	function slotBarPct(count: number): number {
+		if (count <= 0) return 0;
+		return Math.max(3, Math.round((count / hourlyMaxBand) * 100));
+	}
+
+	function slotCapPct(): number {
+		if (capPerHour <= 0) return 0;
+		return Math.min(100, Math.round((capPerHour / hourlyMaxBand) * 100));
+	}
+
+	// ===== 健康提示 =====
+	let healthIssue = $derived(
+		[
+			failedCount > 0 ? `${failedCount} 集上传失败` : '',
+			stuckList.length > 0 ? `${stuckList.length} 个文件等 strm 超 30 分钟` : ''
+		]
+			.filter(Boolean)
+			.join(' / ')
+	);
+
+	// 纯字符串截取，避免 new Date 解析带来的时区偏差
+	function hhmm(value: string | undefined): string {
+		if (!value) return '-';
+		return value.length >= 5 ? value.slice(-5) : value;
+	}
+
+	function hhmmss(value: string | undefined): string {
+		if (!value) return '-';
+		return value.length >= 8 ? value.slice(-8) : value;
 	}
 
 	let diskTotal = $derived(sysInfo?.total_disk ?? 0);
@@ -325,10 +405,10 @@
 		{#each [
 			{ label: '订阅总数', value: (dashboardData?.enabled_collections ?? 0) + (dashboardData?.enabled_submissions ?? 0) + (dashboardData?.enabled_favorites ?? 0), sub: `合集 ${dashboardData?.enabled_collections ?? 0} · 投稿 ${dashboardData?.enabled_submissions ?? 0} · 收藏 ${dashboardData?.enabled_favorites ?? 0}`, color: 'from-emerald-400 to-teal-500', icon: VideoIcon },
 			{ label: '近 7 日入库', value: totalVideos, sub: '视频', color: 'from-sky-400 to-blue-500', icon: CloudDownloadIcon },
-			{ label: '待上传 115', value: pendingUpload, sub: `共 ${queue?.total ?? 0} 集`, color: 'from-violet-400 to-indigo-500', icon: DownloadIcon },
-			{ label: '已上传', value: uploadedDone, sub: `${uploadPercent}%`, color: 'from-emerald-400 to-green-500', icon: CircleCheckBigIcon },
-			{ label: '等 strm', value: queue?.waiting ?? 0, sub: '未就绪', color: 'from-amber-400 to-orange-500', icon: ClockIcon },
-			{ label: '失败', value: queue?.failed ?? 0, sub: '需关注', color: 'from-rose-400 to-red-500', icon: DatabaseIcon }
+			{ label: '待上传 115', value: pendingCount, sub: `共 ${queue?.total ?? 0} 集`, color: 'from-violet-400 to-indigo-500', icon: DownloadIcon },
+			{ label: '已上传', value: totalUploaded, sub: `${completionPct}%`, color: 'from-emerald-400 to-green-500', icon: CircleCheckBigIcon },
+			{ label: '等 strm', value: waitingCount, sub: '未就绪', color: 'from-amber-400 to-orange-500', icon: ClockIcon },
+			{ label: '失败', value: failedCount, sub: '需关注', color: 'from-rose-400 to-red-500', icon: DatabaseIcon }
 		] as kpi}
 			{@const Icon = kpi.icon}
 			<div
@@ -350,35 +430,156 @@
 		{/each}
 	</div>
 
-	<!-- ========== 漏斗 + 状态面板 ========== -->
-	<div class="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
-		<!-- 漏斗 -->
-		<div class="rounded-2xl border border-white/70 bg-white/75 p-5 shadow-[0_8px_24px_rgba(31,79,120,0.08)] backdrop-blur xl:col-span-2">
-			<div class="mb-4 flex items-center justify-between">
-				<h3 class="text-sm font-semibold">内容流转漏斗</h3>
-				<span class="text-muted-foreground text-[11px]">已下载 → 已上传 → strm 就绪 → 已清理本地</span>
+	<!-- ========== 流水线健康 + 任务状态 ========== -->
+	<div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+		<!-- 流水线健康 -->
+		<div class="rounded-2xl border border-white/70 bg-white/75 p-5 shadow-[0_8px_24px_rgba(31,79,120,0.08)] backdrop-blur lg:col-span-2">
+			<!-- a) 标题 + 节奏胶囊 -->
+			<div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+				<h3 class="text-sm font-semibold">流水线健康</h3>
+				<div class="flex flex-wrap items-center gap-1.5">
+					<span class="rounded-full border border-slate-200 bg-white/85 px-2.5 py-0.5 text-[10px] whitespace-nowrap">
+						单轮 {maxPerRound > 0 ? maxPerRound : '-'} 集
+					</span>
+					<span class="rounded-full border border-slate-200 bg-white/85 px-2.5 py-0.5 text-[10px] whitespace-nowrap">
+						周期 {intervalHours > 0 ? intervalHours : '-'} 小时
+					</span>
+					<span class="rounded-full border border-slate-200 bg-white/85 px-2.5 py-0.5 text-[10px] whitespace-nowrap">
+						小时上限 {capPerHour > 0 ? capPerHour : '-'}
+					</span>
+				</div>
 			</div>
-			<div class="flex flex-col items-center gap-2">
-				{#each stages as s, i}
-					{@const w = 100 - i * 12}
-					<div class="relative flex w-full items-center justify-center">
+
+			<!-- b) 四段流水线 -->
+			<div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+				{#each pipelineStages as seg}
+					<div class="relative overflow-hidden rounded-xl bg-white/70 px-3 pt-3 pb-2.5">
 						<div
-							class="rounded-lg py-3 text-center text-white shadow-sm transition-all"
-							style="width: {w}%; background: linear-gradient(90deg, {s.color[0]}, {s.color[1]});"
-						>
-							<div class="flex items-center justify-center gap-3">
-								<span class="text-xs opacity-90">{s.name}</span>
-								<span class="text-lg font-bold tabular-nums">{s.value}</span>
-							</div>
-						</div>
-						<div class="absolute right-0 hidden items-center gap-1 md:flex">
-							<span class="rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-medium shadow-sm">
-								{stages[0].value > 0 ? Math.round((s.value / stages[0].value) * 100) : 0}%
-							</span>
-						</div>
+							class="absolute inset-x-0 top-0 h-1"
+							style="background: linear-gradient(90deg, {seg.from}, {seg.to});"
+						></div>
+						<p class="text-[11px] text-slate-600">{seg.name}</p>
+						<p class="mt-0.5 text-2xl font-bold tabular-nums">{seg.value}</p>
+						<p class="text-[10px] text-slate-400">{seg.sub}</p>
 					</div>
 				{/each}
 			</div>
+
+			<!-- c) 整体完成度 -->
+			<div class="mt-3 flex items-center gap-3">
+				<span class="text-muted-foreground text-[10px] whitespace-nowrap">整体完成度</span>
+				<div class="h-2.5 flex-1 overflow-hidden rounded-full bg-slate-200/70">
+					<div
+						class="h-full rounded-full bg-gradient-to-r from-emerald-400 to-blue-500 transition-all"
+						style="width: {completionPct}%"
+					></div>
+				</div>
+				<span class="text-lg font-bold tabular-nums">{completionPct}%</span>
+				<span class="text-muted-foreground text-[11px] whitespace-nowrap">
+					{totalUploaded} / {completionTotal} 集已完成
+				</span>
+			</div>
+
+			<!-- d) 近 12 小时上传量 -->
+			<div class="mt-3 border-t border-white/60 pt-3">
+				<div class="mb-2 flex items-center justify-between">
+					<span class="text-[11px] font-medium">近 12 小时上传量</span>
+					<span class="rounded-full bg-rose-50 px-2 py-0.5 text-[10px] text-rose-500">
+						上限 {capPerHour > 0 ? capPerHour : '-'}/小时
+					</span>
+				</div>
+				{#if hourlyHasData}
+					<div class="relative h-24">
+						<div class="flex h-full items-end gap-1">
+							{#each hourly12 as s}
+								<div
+									class="group flex h-full flex-1 flex-col items-center justify-end"
+									title="{s.key} · {s.count} 集"
+								>
+									{#if s.count > 0}
+										<div
+											class="relative w-full max-w-[42px] rounded-t-md bg-gradient-to-t from-sky-300 to-emerald-400 transition-all"
+											style="height: {slotBarPct(s.count)}%"
+										>
+											<span
+												class="absolute -top-5 left-1/2 -translate-x-1/2 rounded-full bg-white/95 px-1.5 py-0.5 text-[10px] font-medium tabular-nums opacity-0 shadow-sm transition group-hover:opacity-100"
+											>
+												{s.count}
+											</span>
+										</div>
+									{:else}
+										<div class="h-0.5 w-full max-w-[42px] rounded-t-sm bg-slate-200/70"></div>
+									{/if}
+								</div>
+							{/each}
+						</div>
+						{#if capPerHour > 0}
+							<div
+								class="pointer-events-none absolute inset-x-0 z-10 border-t border-dashed border-rose-400/80"
+								style="bottom: {slotCapPct()}%"
+							></div>
+						{/if}
+					</div>
+					<div class="mt-1 flex gap-1">
+						{#each hourly12 as s}
+							<div
+								class="flex-1 text-center text-[9px] tabular-nums {s.isNow
+									? 'font-medium text-slate-600'
+									: 'text-muted-foreground'}"
+							>
+								{s.hour}
+							</div>
+						{/each}
+					</div>
+				{:else}
+					<p class="text-muted-foreground py-6 text-center text-[11px]">暂无数据（等待下一轮上传统计）</p>
+				{/if}
+			</div>
+
+			<!-- e) 三格：预计完成 / 本小时配速 / 失败·滞留 -->
+			<div class="mt-3 grid grid-cols-3 gap-2.5">
+				<div class="rounded-xl bg-white/70 px-3 py-2.5">
+					<p class="text-[10px] text-slate-400">预计完成</p>
+					{#if etaRounds > 0 && pendingCount > 0}
+						<p class="text-base font-bold tabular-nums">还需 {etaRounds} 轮</p>
+						<p class="text-[10px] text-slate-400">≈ {etaText}</p>
+					{:else}
+						<p class="text-base font-bold tabular-nums">已清空</p>
+						<p class="text-[10px] text-slate-400">暂无待上传</p>
+					{/if}
+				</div>
+				<div class="rounded-xl bg-white/70 px-3 py-2.5">
+					<p class="text-[10px] text-slate-400">本小时配速</p>
+					<p class="text-base font-bold tabular-nums">
+						{uploadedLastHour} / {capPerHour > 0 ? capPerHour : '-'} 集
+					</p>
+					<div class="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-200/70">
+						<div
+							class="h-full rounded-full bg-gradient-to-r from-emerald-400 to-blue-500 transition-all"
+							style="width: {hourPacePct}%"
+						></div>
+					</div>
+				</div>
+				<div class="rounded-xl bg-white/70 px-3 py-2.5">
+					<p class="text-[10px] text-slate-400">失败 / 滞留</p>
+					<p class="text-base font-bold tabular-nums">
+						<span class={failedCount > 0 ? 'text-rose-500' : 'text-emerald-600'}>{failedCount}</span>
+						<span class="text-muted-foreground text-[11px]"> · 滞留 </span>
+						<span class={stuckList.length > 0 ? 'text-amber-600' : 'text-emerald-600'}>{stuckList.length}</span>
+					</p>
+				</div>
+			</div>
+
+			<!-- f) 健康提示条 -->
+			{#if failedCount > 0 || stuckList.length > 0}
+				<div class="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-[11px] text-amber-700">
+					⚠ {healthIssue}
+				</div>
+			{:else}
+				<div class="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-[11px] text-emerald-700">
+					队列健康：无失败、无滞留；下一轮 {hhmm(uploadStatus?.next_run_at)} 开始，按当前配速预计再传 {etaRounds} 轮
+				</div>
+			{/if}
 		</div>
 
 		<!-- 状态面板 -->
@@ -402,12 +603,24 @@
 					</Badge>
 				</div>
 				<div class="flex items-center justify-between rounded-xl bg-white/70 px-3 py-2">
-					<span class="text-muted-foreground text-xs">每轮上限</span>
-					<span class="tabular-nums text-xs">{uploadStatus?.max_per_round ?? '-'} 集</span>
+					<span class="text-muted-foreground text-xs">下次上传</span>
+					<span class="tabular-nums text-xs">{hhmm(uploadStatus?.next_run_at)}</span>
 				</div>
 				<div class="flex items-center justify-between rounded-xl bg-white/70 px-3 py-2">
-					<span class="text-muted-foreground text-xs">删除本地</span>
-					<span class="text-xs">{uploadStatus?.delete_mode === 'delete' ? '就绪后删除' : uploadStatus?.delete_mode === 'recycle' ? '移入回收站' : '保留'}</span>
+					<span class="text-muted-foreground text-xs">数据更新</span>
+					<span class="tabular-nums text-xs">{hhmmss(uploadStatus?.updated_at)}</span>
+				</div>
+				<div class="rounded-xl bg-white/70 px-3 py-2">
+					<div class="flex items-center justify-between">
+						<span class="text-muted-foreground text-xs">本小时已传</span>
+						<span class="tabular-nums text-xs">{uploadedLastHour} / {capPerHour > 0 ? capPerHour : '-'}</span>
+					</div>
+					<div class="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-200/70">
+						<div
+							class="h-full rounded-full bg-gradient-to-r from-emerald-400 to-blue-500 transition-all"
+							style="width: {hourPacePct}%"
+						></div>
+					</div>
 				</div>
 			</div>
 		</div>
@@ -425,27 +638,29 @@
 				<p class="text-muted-foreground text-xs">{uploadStatus?.reason ?? '插件未启用'}</p>
 			{:else}
 				<div class="mb-1 flex items-end justify-between">
-					<span class="text-3xl font-bold tabular-nums">{pendingUpload}</span>
+					<span class="text-3xl font-bold tabular-nums">{pendingCount}</span>
 					<span class="text-muted-foreground text-xs">待上传</span>
 				</div>
 				<div class="h-2.5 w-full overflow-hidden rounded-full bg-slate-200/70">
 					<div
 						class="h-full rounded-full bg-gradient-to-r from-emerald-400 to-teal-500 transition-all"
-						style="width: {uploadPercent}%"
+						style="width: {completionPct}%"
 					></div>
 				</div>
-				<p class="text-muted-foreground mt-1 text-[11px]">已完成 {uploadedDone} / {queue?.total ?? 0}（{uploadPercent}%）</p>
+				<p class="text-muted-foreground mt-1 text-[11px]">
+					已完成 {totalUploaded} / {completionTotal}（{completionPct}%）
+				</p>
 				<div class="mt-3 grid grid-cols-3 gap-2 text-center">
 					<div class="rounded-xl bg-white/70 py-2">
 						<p class="text-base font-semibold tabular-nums">{round?.uploaded ?? 0}</p>
 						<p class="text-muted-foreground text-[10px]">本轮已传</p>
 					</div>
 					<div class="rounded-xl bg-white/70 py-2">
-						<p class="text-base font-semibold tabular-nums">{queue?.waiting ?? 0}</p>
+						<p class="text-base font-semibold tabular-nums">{waitingCount}</p>
 						<p class="text-muted-foreground text-[10px]">等 strm</p>
 					</div>
 					<div class="rounded-xl bg-white/70 py-2">
-						<p class="text-base font-semibold tabular-nums text-rose-500">{queue?.failed ?? 0}</p>
+						<p class="text-base font-semibold tabular-nums text-rose-500">{failedCount}</p>
 						<p class="text-muted-foreground text-[10px]">失败</p>
 					</div>
 				</div>
@@ -472,14 +687,6 @@
 					<span class="text-muted-foreground">让路 MP</span>
 					<span>{uploadStatus?.yield_to_mp ? '开启' : '关闭'}</span>
 				</div>
-				{#if rounds}
-					<div class="mt-2 rounded-xl bg-gradient-to-r from-sky-50 to-emerald-50 p-3">
-						<p class="text-muted-foreground text-[10px]">预计完成</p>
-						<p class="mt-0.5 text-sm font-semibold">
-							还需 {rounds.rounds} 轮 · 约 {rounds.days > 0 ? `${rounds.days} 天` : `${rounds.hours} 小时`}
-						</p>
-					</div>
-				{/if}
 			</div>
 		</div>
 
@@ -512,64 +719,10 @@
 		</div>
 	</div>
 
-	<!-- ========== 近 12 小时上传量 + 目录分布 + 存储 ========== -->
+	<!-- ========== 目录分布 + 存储 ========== -->
 	<div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
-		<!-- 近 12 小时上传量 -->
-		<div class="rounded-2xl border border-white/70 bg-white/75 p-5 shadow-[0_8px_24px_rgba(31,79,120,0.08)] backdrop-blur">
-			<div class="mb-2 flex items-center justify-between">
-				<h3 class="text-sm font-semibold">近 12 小时上传量</h3>
-				{#if hourlyCap > 0}
-					<span class="rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-medium whitespace-nowrap text-rose-500">
-						上限 {hourlyCap}/小时
-					</span>
-				{/if}
-			</div>
-			{#if hourlyList.length === 0}
-				<p class="text-muted-foreground py-10 text-center text-xs">暂无数据（等待下一轮上传统计）</p>
-			{:else}
-				<div class="relative h-32">
-					<div class="flex h-full items-end gap-1.5">
-						{#each hourlyList as h}
-							<div class="group flex h-full flex-1 items-end justify-center" title="{h.hour} · {h.count} 集">
-								<div
-									class="relative w-full max-w-[46px] rounded-t-md bg-gradient-to-t from-sky-300 to-emerald-400 transition-all"
-									style="height: {hourlyBarPct(h.count)}%"
-								>
-									<span
-										class="absolute -top-5 left-1/2 -translate-x-1/2 rounded-full bg-white/95 px-1.5 py-0.5 text-[10px] font-medium tabular-nums opacity-0 shadow-sm transition group-hover:opacity-100"
-									>
-										{h.count}
-									</span>
-								</div>
-							</div>
-						{/each}
-					</div>
-					{#if hourlyCap > 0}
-						<div
-							class="pointer-events-none absolute inset-x-0 z-10 border-t border-dashed border-rose-400/80"
-							style="bottom: {hourlyCapPct()}%"
-						></div>
-					{/if}
-				</div>
-				<div class="mt-1.5 flex gap-1.5">
-					{#each hourlyList as h}
-						<div class="text-muted-foreground flex-1 truncate text-center text-[9px] tabular-nums">
-							{shortHour(h.hour)}
-						</div>
-					{/each}
-				</div>
-				<div class="text-muted-foreground mt-2 flex items-center justify-between text-[10px]">
-					<span>共 {hourlyList.length} 个时段</span>
-					<span class="flex items-center gap-1">
-						<span class="inline-block h-0 w-4 border-t border-dashed border-rose-400/80"></span>
-						每小时上限
-					</span>
-				</div>
-			{/if}
-		</div>
-
 		<!-- 目录分布 + 滞留 -->
-		<div class="rounded-2xl border border-white/70 bg-white/75 p-5 shadow-[0_8px_24px_rgba(31,79,120,0.08)] backdrop-blur">
+		<div class="rounded-2xl border border-white/70 bg-white/75 p-5 shadow-[0_8px_24px_rgba(31,79,120,0.08)] backdrop-blur lg:col-span-2">
 			<div class="mb-2 flex items-center justify-between">
 				<h3 class="text-sm font-semibold">目录分布</h3>
 				<span class="text-muted-foreground text-[10px]">{dirStats.length} 个目录</span>

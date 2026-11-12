@@ -476,6 +476,24 @@ export interface UploadEvent {
 	label: string;
 }
 
+export interface UploadDirStat {
+	dir: string;
+	total: number;
+	done: number;
+	pending: number;
+	waiting: number;
+}
+
+export interface UploadHourly {
+	hour: string;
+	count: number;
+}
+
+export interface UploadStuck {
+	name: string;
+	minutes: number;
+}
+
 export interface UploadStatus {
 	available: boolean;
 	reason?: string;
@@ -491,4 +509,11 @@ export interface UploadStatus {
 	queue?: UploadQueue;
 	round?: UploadRound;
 	recent?: UploadEvent[];
+	max_per_hour?: number;
+	uploaded_last_hour?: number;
+	totals?: { uploaded: number; deleted: number; failed: number };
+	hourly?: UploadHourly[];
+	by_dir?: UploadDirStat[];
+	stuck?: UploadStuck[];
+	next_run_at?: string;
 }

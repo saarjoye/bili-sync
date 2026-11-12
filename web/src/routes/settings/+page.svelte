@@ -767,6 +767,13 @@
 														{notifier.url}
 													</span>
 												</div>
+											{:else if notifier.type === 'wecom'}
+												<div class="flex flex-wrap items-center gap-2">
+													<Badge variant="secondary">企业微信</Badge>
+													<span class="text-muted-foreground text-sm break-all">
+														AgentId: {notifier.agent_id} → {notifier.to_user}
+													</span>
+												</div>
 											{:else if notifier.type === 'smtp'}
 												<div class="flex flex-wrap items-center gap-2">
 													<Badge variant="secondary">SMTP</Badge>

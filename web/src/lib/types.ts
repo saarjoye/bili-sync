@@ -516,6 +516,8 @@ export interface UploadStatus {
 	by_dir?: UploadDirStat[];
 	stuck?: UploadStuck[];
 	next_run_at?: string;
+	/** 由 bili-sync 后端在保存插件配置时写入：MP 会重注册定时器，下次上传 ≈ 该时刻 + 周期 */
+	config_saved_at?: string;
 }
 
 // ===== MoviePilot DirUpload115 插件配置（bili-sync 后端代理 GET/PUT /api/dirupload115/config）=====

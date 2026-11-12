@@ -334,6 +334,13 @@ fn patch_status_file(config: &Value) -> bool {
             target.insert(field.to_owned(), value.clone());
         }
     }
+    // 记录本次配置保存时刻：MP 保存插件配置会重新注册插件的 interval 定时服务，
+    // 所以「下一次自动上传 ≈ 保存配置时刻 + 新周期」。插件下一轮写 status.json 时会整体重写，
+    // 这个字段自然消失（届时 next_run_at 已是新值）。
+    target.insert(
+        "config_saved_at".to_owned(),
+        Value::String(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()),
+    );
 
     let Ok(serialized) = serde_json::to_string_pretty(&current) else {
         return false;

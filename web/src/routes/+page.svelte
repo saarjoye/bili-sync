@@ -202,9 +202,29 @@
 		return diff >= 0 ? body : `+${body}`;
 	}
 
-	let nextUploadAt = $derived(parseStamp(uploadStatus?.next_run_at));
+	let intervalSeconds = $derived(uploadStatus?.interval_seconds ?? 0);
+	let statusUpdatedAt = $derived(parseStamp(uploadStatus?.updated_at));
+	let configSavedAt = $derived(parseStamp(uploadStatus?.config_saved_at));
+	// 保存插件配置时 MP 会重注册插件的 interval 定时服务 → 下次上传 ≈ 保存配置时刻 + 新周期；
+	// 插件下一轮写 status.json 后会清掉 config_saved_at，此时回落到插件自己算的 next_run_at。
+	let savedAfterStatus = $derived(
+		configSavedAt !== null &&
+			(statusUpdatedAt === null || configSavedAt.getTime() > statusUpdatedAt.getTime())
+	);
+	let pluginNextAt = $derived(parseStamp(uploadStatus?.next_run_at));
+	let nextUploadAt = $derived(
+		savedAfterStatus && intervalSeconds > 0 && configSavedAt
+			? new Date(configSavedAt.getTime() + intervalSeconds * 1000)
+			: pluginNextAt
+	);
 	let nextUploadText = $derived(fmtClock(nextUploadAt));
 	let nextUploadCountdown = $derived(fmtCountdown(nextUploadAt, clock));
+	let nextUploadHint = $derived(
+		savedAfterStatus
+			? '按「保存配置时刻 + 周期」估算，下一轮跑完转为插件实测值'
+			: `插件每 ${intervalHours > 0 ? intervalHours : '-'} 小时自动一轮`
+	);
+	let pluginNextText = $derived(fmtClock(pluginNextAt));
 
 	// 下载任务的下次时间（taskStatus.next_run 是时间戳/ISO 字符串）
 	let nextDownloadAt = $derived(taskStatus?.next_run ? new Date(taskStatus.next_run) : null);
@@ -659,12 +679,14 @@
 				<div class="rounded-xl bg-white/70 px-3 py-2">
 					<div class="flex items-center justify-between">
 						<span class="text-muted-foreground text-xs">下次上传</span>
-						<span class="tabular-nums text-xs font-medium whitespace-nowrap">{nextUploadText}</span>
+						<span
+							class="tabular-nums text-xs font-medium whitespace-nowrap"
+							title="插件 status.json 记录：{pluginNextText}"
+							>{nextUploadText}</span
+						>
 					</div>
 					<div class="mt-1 flex items-center justify-between">
-						<span class="text-muted-foreground text-[10px]"
-							>插件每 {intervalHours > 0 ? intervalHours : '-'} 小时自动一轮</span
-						>
+						<span class="text-muted-foreground text-[10px]">{nextUploadHint}</span>
 						<span class="flex items-baseline gap-1">
 							<span class="text-muted-foreground text-[10px]">还剩</span>
 							<span class="tabular-nums text-base font-bold text-slate-700">{nextUploadCountdown || '—'}</span>

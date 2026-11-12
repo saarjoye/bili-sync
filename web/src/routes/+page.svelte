@@ -67,14 +67,31 @@
 	let maxPerRound = $derived(uploadStatus?.max_per_round ?? 0);
 	let capPerHour = $derived(uploadStatus?.max_per_hour ?? 0);
 	let uploadedLastHour = $derived(uploadStatus?.uploaded_last_hour ?? 0);
-	let intervalHours = $derived(
-		uploadStatus?.interval_seconds ? Math.round(uploadStatus.interval_seconds / 3600) : 0
+	let intervalMinutes = $derived(
+		uploadStatus?.interval_seconds ? Math.round(uploadStatus.interval_seconds / 60) : 0
+	);
+	let intervalHours = $derived(intervalMinutes > 0 ? intervalMinutes / 60 : 0);
+	// 友好显示：90 分钟以内用分钟，否则用小时
+	let intervalLabel = $derived(
+		intervalMinutes <= 0
+			? '-'
+			: intervalMinutes < 90
+				? `${intervalMinutes} 分钟`
+				: `${Math.round(intervalMinutes / 60)} 小时`
 	);
 
 	// ETA：待上传集数 ÷ 单轮上限 × 轮周期
 	let etaRounds = $derived(pendingCount > 0 && maxPerRound > 0 ? Math.ceil(pendingCount / maxPerRound) : 0);
 	let etaHours = $derived(etaRounds * (intervalHours > 0 ? intervalHours : 6));
-	let etaText = $derived(etaHours > 48 ? `${Math.round(etaHours / 24)} 天` : `${Math.round(etaHours)} 小时`);
+	let etaText = $derived(
+		etaHours <= 0
+			? '-'
+			: etaHours < 1
+				? `${Math.max(1, Math.round(etaHours * 60))} 分钟`
+				: etaHours > 48
+					? `${Math.round(etaHours / 24)} 天`
+					: `${Math.round(etaHours)} 小时`
+	);
 	let hourPacePct = $derived(
 		capPerHour > 0 ? Math.min(100, Math.round((uploadedLastHour / capPerHour) * 100)) : 0
 	);
@@ -222,7 +239,7 @@
 	let nextUploadHint = $derived(
 		savedAfterStatus
 			? '按「保存配置时刻 + 周期」估算，下一轮跑完转为插件实测值'
-			: `插件每 ${intervalHours > 0 ? intervalHours : '-'} 小时自动一轮`
+			: `插件每 ${intervalLabel} 自动一轮`
 	);
 	let pluginNextText = $derived(fmtClock(pluginNextAt));
 
@@ -254,7 +271,7 @@
 	let savingConfig = $state(false);
 	let cfgMaxPerRound = $state<number>(20);
 	let cfgMaxPerHour = $state<number>(60);
-	let cfgIntervalHours = $state<number>(6);
+	let cfgIntervalMinutes = $state<number>(360);
 	let cfgYieldToMp = $state<boolean>(true);
 	let cfgDeleteMode = $state<string>('delete');
 
@@ -274,7 +291,7 @@
 			if (Number.isFinite(perHour) && perHour > 0) cfgMaxPerHour = perHour;
 			const intervalSeconds = Number(cfg['interval_seconds']);
 			if (Number.isFinite(intervalSeconds) && intervalSeconds > 0) {
-				cfgIntervalHours = Math.round((intervalSeconds / 3600) * 100) / 100;
+				cfgIntervalMinutes = Math.max(1, Math.round(intervalSeconds / 60));
 			}
 			const yieldToMp = cfg['yield_to_mp'];
 			if (typeof yieldToMp === 'boolean') cfgYieldToMp = yieldToMp;
@@ -297,7 +314,7 @@
 			const body: DirUpload115ConfigUpdate = {
 				max_per_round: Math.round(Number(cfgMaxPerRound)),
 				max_per_hour: Math.round(Number(cfgMaxPerHour)),
-				interval_seconds: Math.round(Number(cfgIntervalHours) * 3600),
+				interval_seconds: Math.round(Number(cfgIntervalMinutes) * 60),
 				yield_to_mp: Boolean(cfgYieldToMp),
 				delete_mode: cfgDeleteMode
 			};
@@ -507,7 +524,7 @@
 						单轮 {maxPerRound > 0 ? maxPerRound : '-'} 集
 					</span>
 					<span class="rounded-full border border-slate-200 bg-white/85 px-2.5 py-0.5 text-[10px] whitespace-nowrap">
-						周期 {intervalHours > 0 ? intervalHours : '-'} 小时
+						周期 {intervalLabel}
 					</span>
 					<span class="rounded-full border border-slate-200 bg-white/85 px-2.5 py-0.5 text-[10px] whitespace-nowrap">
 						小时上限 {capPerHour > 0 ? capPerHour : '-'}
@@ -760,7 +777,7 @@
 			<div class="space-y-2 text-xs">
 				<div class="flex items-center justify-between">
 					<span class="text-muted-foreground">周期</span>
-					<span class="tabular-nums">{uploadStatus?.interval_seconds ? Math.round(uploadStatus.interval_seconds / 3600) : '-'} 小时</span>
+					<span class="tabular-nums">{intervalLabel}</span>
 				</div>
 				<div class="flex items-center justify-between">
 					<span class="text-muted-foreground">本轮开始</span>
@@ -948,18 +965,18 @@
 			</div>
 
 			<div class="space-y-1.5">
-				<Label for="cfg-interval">周期</Label>
+				<Label for="cfg-interval">周期（分钟）</Label>
 				<Input
 					id="cfg-interval"
 					type="number"
-					min="0.5"
-					max="24"
-					step="0.5"
-					bind:value={cfgIntervalHours}
+					min="10"
+					max="1440"
+					step="5"
+					bind:value={cfgIntervalMinutes}
 					disabled={!configAvailable || savingConfig}
 				/>
 				<p class="text-muted-foreground text-[10px]">
-					单位小时 · 保存时换算 {Math.round(Number(cfgIntervalHours) * 3600)} 秒（600–86400）
+					单位分钟 · 保存时换算 {Math.round(Number(cfgIntervalMinutes) * 60)} 秒（600–86400，即 10 分钟–24 小时）
 				</p>
 			</div>
 

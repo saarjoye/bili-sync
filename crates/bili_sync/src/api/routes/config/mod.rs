@@ -42,7 +42,11 @@ pub async fn ping_notifiers(
     }
     notifier
         .notify(bili_client.inner_client(), Message{
-            message: "This is a test notification from BiliSync.".into(),
+            message: format!(
+                "【Bili-Sync】测试消息\n通知通道配置成功，这是一条测试推送。\n时间：{}",
+                chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+            )
+            .into(),
             image_url: Some("https://socialify.git.ci/amtoaer/bili-sync/image?description=1&font=KoHo&issues=1&language=1&logo=https%3A%2F%2Fs2.loli.net%2F2023%2F12%2F02%2F9EwT2yInOu1d3zm.png&name=1&owner=1&pattern=Signal&pulls=1&stargazers=1&theme=Light".to_owned()),
         })
         .await?;

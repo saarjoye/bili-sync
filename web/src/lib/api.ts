@@ -321,6 +321,10 @@ class ApiClient {
 		return this.put<boolean>(`/video-sources/${type}/${id}/schedule`, form);
 	}
 
+	async getUploadStatus(): Promise<ApiResponse<UploadStatus>> {
+		return this.get<UploadStatus>('/upload-status');
+	}
+
 	async runVideoSource(type: string, id: number): Promise<ApiResponse<boolean>> {
 		return this.post<boolean>(`/video-sources/${type}/${id}/run`);
 	}
@@ -463,6 +467,7 @@ const api = {
 	insertSubmission: (request: InsertSubmissionRequest) => apiClient.insertSubmission(request),
 	getVideoSourcesDetails: () => apiClient.getVideoSourcesDetails(),
 	runVideoSource: (type: string, id: number) => apiClient.runVideoSource(type, id),
+	getUploadStatus: () => apiClient.getUploadStatus(),
 	updateSchedule: (
 		type: string,
 		id: number,

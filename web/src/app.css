@@ -136,3 +136,58 @@ html {
 		@apply bg-background text-foreground;
 	}
 }
+
+/* ============================================================
+   全局主题（P1）：浅青蓝渐变 + 玻璃卡片
+   只作用于“基础容器类”，不改组件内部结构，风险最低
+   ============================================================ */
+:root {
+	--dsh-grad-from: #eaf7f4;
+	--dsh-grad-via: #eff6fb;
+	--dsh-grad-to: #e8f1fb;
+	--dsh-card-bg: rgba(255, 255, 255, 0.78);
+	--dsh-card-border: rgba(255, 255, 255, 0.8);
+	--dsh-card-shadow: 0 8px 24px rgba(31, 79, 120, 0.08);
+}
+
+body {
+	background:
+		radial-gradient(1200px 600px at 90% -10%, rgba(46, 211, 168, 0.16), transparent 60%),
+		radial-gradient(900px 500px at -10% 10%, rgba(76, 141, 255, 0.14), transparent 55%),
+		linear-gradient(135deg, var(--dsh-grad-from) 0%, var(--dsh-grad-via) 50%, var(--dsh-grad-to) 100%);
+	background-attachment: fixed;
+	min-height: 100vh;
+}
+
+/* 玻璃卡片：所有 Card 组件容器（rounded-xl + border + bg-card）统一改观 */
+.glass-card,
+.bg-card.rounded-xl,
+.bg-background.rounded-xl,
+[data-slot='card'] {
+	background: var(--dsh-card-bg) !important;
+	border-color: var(--dsh-card-border) !important;
+	box-shadow: var(--dsh-card-shadow);
+	backdrop-filter: blur(14px);
+	-webkit-backdrop-filter: blur(14px);
+	border-radius: 1.25rem !important;
+}
+
+/* 表头与表格容器同样轻量化 */
+.bg-card.rounded-xl > table,
+table {
+	background: transparent;
+}
+
+/* 侧边栏融入渐变背景 */
+[data-sidebar='sidebar'] {
+	background: rgba(255, 255, 255, 0.55) !important;
+	backdrop-filter: blur(12px);
+	-webkit-backdrop-filter: blur(12px);
+	border-right-color: rgba(255, 255, 255, 0.6) !important;
+}
+
+/* 主内容区不再遮盖背景 */
+main,
+[data-slot='main'] {
+	background: transparent !important;
+}

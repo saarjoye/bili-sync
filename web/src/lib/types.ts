@@ -451,3 +451,44 @@ export type QrcodePollResponse =
 			status: 'expired';
 			message: string;
 	  };
+
+// ===== 115 上传进度（来自 DirUpload115 插件写的 status.json）=====
+export interface UploadQueue {
+	total: number;
+	done: number;
+	pending: number;
+	waiting: number;
+	failed: number;
+}
+
+export interface UploadRound {
+	scanned: number;
+	uploaded: number;
+	waiting: number;
+	skipped: number;
+	failed: number;
+}
+
+export interface UploadEvent {
+	time: string;
+	name: string;
+	outcome: 'uploaded' | 'waiting' | 'skipped' | 'failed' | string;
+	label: string;
+}
+
+export interface UploadStatus {
+	available: boolean;
+	reason?: string;
+	path?: string;
+	updated_at?: string;
+	round_started_at?: string;
+	enabled?: boolean;
+	interval_seconds?: number;
+	max_per_round?: number;
+	yield_to_mp?: boolean;
+	delete_mode?: string;
+	ready_mode?: string;
+	queue?: UploadQueue;
+	round?: UploadRound;
+	recent?: UploadEvent[];
+}

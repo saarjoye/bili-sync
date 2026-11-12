@@ -189,20 +189,27 @@
 		return `${d.getMonth() + 1}-${d.getDate()} ${WEEK_LABEL[d.getDay()]} ${hm}`;
 	}
 
-	// 相对时间：还有 3 小时 36 分 / 已过 5 分钟（随每分钟的状态刷新重算）
-	function fmtRel(d: Date | null): string {
+	// 每秒滴答（只驱动倒计时文本，不影响其它数据）
+	let clock = $state(Date.now());
+
+	// 倒计时：HH:MM:SS，到期后前缀 + 表示已过
+	function fmtCountdown(d: Date | null, nowMs: number): string {
 		if (!d) return '';
-		const diffMin = Math.round((d.getTime() - Date.now()) / 60000);
-		const abs = Math.abs(diffMin);
-		const hours = Math.floor(abs / 60);
-		const mins = abs % 60;
-		const body = hours > 0 ? `${hours} 小时${mins > 0 ? ` ${mins} 分` : ''}` : `${mins} 分钟`;
-		return diffMin >= 0 ? `还有 ${body}` : `已过 ${body}`;
+		const diff = Math.round((d.getTime() - nowMs) / 1000);
+		const abs = Math.abs(diff);
+		const pad = (n: number) => String(n).padStart(2, '0');
+		const body = `${pad(Math.floor(abs / 3600))}:${pad(Math.floor((abs % 3600) / 60))}:${pad(abs % 60)}`;
+		return diff >= 0 ? body : `+${body}`;
 	}
 
 	let nextUploadAt = $derived(parseStamp(uploadStatus?.next_run_at));
 	let nextUploadText = $derived(fmtClock(nextUploadAt));
-	let nextUploadRel = $derived(fmtRel(nextUploadAt));
+	let nextUploadCountdown = $derived(fmtCountdown(nextUploadAt, clock));
+
+	// 下载任务的下次时间（taskStatus.next_run 是时间戳/ISO 字符串）
+	let nextDownloadAt = $derived(taskStatus?.next_run ? new Date(taskStatus.next_run) : null);
+	let nextDownloadText = $derived(fmtClock(nextDownloadAt));
+	let nextDownloadCountdown = $derived(fmtCountdown(nextDownloadAt, clock));
 
 	function hhmmss(value: string | undefined): string {
 		if (!value) return '-';
@@ -428,7 +435,12 @@
 		loadUploadStatus();
 		loadDirUpload115Config();
 		const timer = setInterval(loadUploadStatus, 60000);
-		return () => clearInterval(timer);
+		// 每秒滴答：驱动「下次上传 / 下次下载」的倒计时
+		const clockTimer = setInterval(() => (clock = Date.now()), 1000);
+		return () => {
+			clearInterval(timer);
+			clearInterval(clockTimer);
+		};
 	});
 </script>
 <div class="min-h-screen bg-gradient-to-br from-[#EAF7F4] via-[#EFF6FB] to-[#E8F1FB] p-4 md:p-6">
@@ -610,7 +622,7 @@
 				</div>
 			{:else}
 				<div class="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-[11px] text-emerald-700">
-					队列健康：无失败、无滞留；下一轮 {nextUploadText}（{nextUploadRel}）开始，按当前配速预计再传 {etaRounds} 轮
+					队列健康：无失败、无滞留；下一轮 {nextUploadText}（还剩 {nextUploadCountdown}）开始，按当前配速预计再传 {etaRounds} 轮
 				</div>
 			{/if}
 		</div>
@@ -625,18 +637,18 @@
 						{taskStatus?.is_running ? '运行中' : '空闲'}
 					</Badge>
 				</div>
-				<div class="flex items-center justify-between rounded-xl bg-white/70 px-3 py-2">
-					<span class="text-muted-foreground text-xs">下次下载</span>
-					<span class="tabular-nums text-xs"
-						>{taskStatus?.next_run
-							? new Date(taskStatus.next_run).toLocaleString('zh-CN', {
-									month: '2-digit',
-									day: '2-digit',
-									hour: '2-digit',
-									minute: '2-digit'
-								})
-							: '未排期'}</span
-					>
+				<div class="rounded-xl bg-white/70 px-3 py-2">
+					<div class="flex items-center justify-between">
+						<span class="text-muted-foreground text-xs">下次下载</span>
+						<span class="tabular-nums text-xs font-medium whitespace-nowrap">{nextDownloadText}</span>
+					</div>
+					<div class="mt-1 flex items-center justify-between">
+						<span class="text-muted-foreground text-[10px]">bili-sync 下载任务</span>
+						<span class="flex items-baseline gap-1">
+							<span class="text-muted-foreground text-[10px]">还剩</span>
+							<span class="tabular-nums text-base font-bold text-slate-700">{nextDownloadCountdown || '—'}</span>
+						</span>
+					</div>
 				</div>
 				<div class="flex items-center justify-between rounded-xl bg-white/70 px-3 py-2">
 					<span class="text-muted-foreground text-xs">上传调度</span>
@@ -644,14 +656,20 @@
 						{uploadStatus?.available ? (uploadStatus?.enabled ? '已启用' : '已暂停') : '未启用'}
 					</Badge>
 				</div>
-				<div class="flex items-start justify-between rounded-xl bg-white/70 px-3 py-2">
-					<div>
-						<p class="text-muted-foreground text-xs">下次上传</p>
-						<p class="text-muted-foreground mt-0.5 text-[10px]">
-							插件每 {intervalHours > 0 ? intervalHours : '-'} 小时自动一轮 · {nextUploadRel}
-						</p>
+				<div class="rounded-xl bg-white/70 px-3 py-2">
+					<div class="flex items-center justify-between">
+						<span class="text-muted-foreground text-xs">下次上传</span>
+						<span class="tabular-nums text-xs font-medium whitespace-nowrap">{nextUploadText}</span>
 					</div>
-					<span class="tabular-nums text-xs font-medium whitespace-nowrap">{nextUploadText}</span>
+					<div class="mt-1 flex items-center justify-between">
+						<span class="text-muted-foreground text-[10px]"
+							>插件每 {intervalHours > 0 ? intervalHours : '-'} 小时自动一轮</span
+						>
+						<span class="flex items-baseline gap-1">
+							<span class="text-muted-foreground text-[10px]">还剩</span>
+							<span class="tabular-nums text-base font-bold text-slate-700">{nextUploadCountdown || '—'}</span>
+						</span>
+					</div>
 				</div>
 				<div class="flex items-center justify-between rounded-xl bg-white/70 px-3 py-2">
 					<span class="text-muted-foreground text-xs">数据更新</span>

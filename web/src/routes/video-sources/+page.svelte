@@ -76,6 +76,24 @@ import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	let fullSyncDeleteLocal = false;
 	let fullSyncing = false;
 
+	// 上传队列概览（来自 DirUpload115 插件）
+	let uploadSummary = $state<{ pending: number; done: number; waiting: number } | null>(null);
+
+	async function loadUploadSummary() {
+		try {
+			const res = await api.getUploadStatus();
+			if (res.data?.available && res.data.queue) {
+				uploadSummary = {
+					pending: res.data.queue.pending,
+					done: res.data.queue.done,
+					waiting: res.data.queue.waiting
+				};
+			}
+		} catch {
+			uploadSummary = null;
+		}
+	}
+
 	// 编辑表单数据
 	let editForm = {
 		path: '',
@@ -384,6 +402,7 @@ import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 
 	// 初始化
 	onMount(() => {
+		loadUploadSummary();
 		setBreadcrumb([{ label: '视频源' }]);
 		loadVideoSources();
 	});

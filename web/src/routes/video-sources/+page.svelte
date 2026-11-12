@@ -76,6 +76,28 @@ import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	let fullSyncDeleteLocal = false;
 	let fullSyncing = false;
 
+	// 目录预设（用于添加订阅时下拉选择）
+	let dirs = $state<DirPreset[]>([]);
+
+	async function loadDirs() {
+		try {
+			const res = await api.getDirs();
+			dirs = res.data ?? [];
+		} catch {
+			dirs = [];
+		}
+	}
+
+	/** 下拉选目录 → 填充当前添加表单的路径 */
+	function applyDirToAddForm(ev: Event) {
+		const localPath = (ev.currentTarget as HTMLSelectElement).value;
+		if (!localPath) return;
+		const base = localPath.replace(/\/+$/, '');
+		if (addDialogType === 'collections') collectionForm.path = base;
+		else if (addDialogType === 'favorites') favoriteForm.path = base;
+		else submissionForm.path = base;
+	}
+
 	// 上传队列概览（来自 DirUpload115 插件）
 	let uploadSummary = $state<{ pending: number; done: number; waiting: number } | null>(null);
 
@@ -403,6 +425,7 @@ import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	// 初始化
 	onMount(() => {
 		loadUploadSummary();
+		loadDirs();
 		setBreadcrumb([{ label: '视频源' }]);
 		loadVideoSources();
 	});
@@ -914,6 +937,17 @@ import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 				{/if}
 				<div class="mt-4">
 					<Label for="path" class="text-sm font-medium">下载路径</Label>
+						<div class="mt-1 mb-2">
+							<select
+								class="border-input bg-background focus-visible:ring-ring flex h-9 w-full rounded-md border px-2 text-sm focus-visible:ring-2 focus-visible:outline-none"
+								onchange={applyDirToAddForm}
+							>
+								<option value="">— 从「目录」中选择（可选） —</option>
+								{#each dirs as d}
+									<option value={d.local_path}>{d.alias} · {d.local_path}</option>
+									{/each}
+								</select>
+							</div>
 					{#if addDialogType === 'favorites'}
 						<Input
 							id="path"

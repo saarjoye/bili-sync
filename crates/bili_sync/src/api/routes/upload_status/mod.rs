@@ -5,7 +5,7 @@ use axum::Json;
 use axum::Router;
 use axum::routing::get;
 
-use crate::api::ApiResponse;
+use crate::api::response::ApiResponse;
 
 fn status_path() -> PathBuf {
     std::env::var("BILI_SYNC_UPLOAD_STATUS")

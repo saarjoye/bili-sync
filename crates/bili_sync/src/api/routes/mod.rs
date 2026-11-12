@@ -11,6 +11,7 @@ use crate::config::VersionedConfig;
 
 mod authapi;
 mod dirs;
+mod upload_status;
 mod config;
 mod dashboard;
 mod login;
@@ -37,6 +38,7 @@ pub fn router() -> Router {
             // 账号体系接口（登录/初始化/登出/状态），自身不做鉴权
             .merge(authapi::router())
             .merge(dirs::router())
+        .merge(upload_status::router())
             .merge(wizard::router())
             .layer(middleware::from_fn(auth)),
     )

@@ -165,11 +165,44 @@
 			.join(' / ')
 	);
 
-	// 纯字符串截取，避免 new Date 解析带来的时区偏差
-	function hhmm(value: string | undefined): string {
-		if (!value) return '-';
-		return value.length >= 5 ? value.slice(-5) : value;
+	// 插件写的 next_run_at 形如 "2026-11-12 22:25:24"：**写状态那一刻 + interval**，每轮都会重算，不是固定值
+	function parseStamp(value: string | undefined): Date | null {
+		if (!value) return null;
+		const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(value);
+		if (!m) return null;
+		return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]));
 	}
+
+	const WEEK_LABEL = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+
+	// 绝对时间：今天/明天/后天 HH:mm，更远的写 M-D 周几 HH:mm；没有值写「未排期」
+	function fmtClock(d: Date | null): string {
+		if (!d) return '未排期';
+		const now = new Date();
+		const pad = (n: number) => String(n).padStart(2, '0');
+		const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+		const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+		const dayDiff = Math.round((startOfDay(d) - startOfDay(now)) / 86400000);
+		if (dayDiff === 0) return `今天 ${hm}`;
+		if (dayDiff === 1) return `明天 ${hm}`;
+		if (dayDiff === 2) return `后天 ${hm}`;
+		return `${d.getMonth() + 1}-${d.getDate()} ${WEEK_LABEL[d.getDay()]} ${hm}`;
+	}
+
+	// 相对时间：还有 3 小时 36 分 / 已过 5 分钟（随每分钟的状态刷新重算）
+	function fmtRel(d: Date | null): string {
+		if (!d) return '';
+		const diffMin = Math.round((d.getTime() - Date.now()) / 60000);
+		const abs = Math.abs(diffMin);
+		const hours = Math.floor(abs / 60);
+		const mins = abs % 60;
+		const body = hours > 0 ? `${hours} 小时${mins > 0 ? ` ${mins} 分` : ''}` : `${mins} 分钟`;
+		return diffMin >= 0 ? `还有 ${body}` : `已过 ${body}`;
+	}
+
+	let nextUploadAt = $derived(parseStamp(uploadStatus?.next_run_at));
+	let nextUploadText = $derived(fmtClock(nextUploadAt));
+	let nextUploadRel = $derived(fmtRel(nextUploadAt));
 
 	function hhmmss(value: string | undefined): string {
 		if (!value) return '-';
@@ -577,7 +610,7 @@
 				</div>
 			{:else}
 				<div class="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-[11px] text-emerald-700">
-					队列健康：无失败、无滞留；下一轮 {hhmm(uploadStatus?.next_run_at)} 开始，按当前配速预计再传 {etaRounds} 轮
+					队列健康：无失败、无滞留；下一轮 {nextUploadText}（{nextUploadRel}）开始，按当前配速预计再传 {etaRounds} 轮
 				</div>
 			{/if}
 		</div>
@@ -594,7 +627,16 @@
 				</div>
 				<div class="flex items-center justify-between rounded-xl bg-white/70 px-3 py-2">
 					<span class="text-muted-foreground text-xs">下次下载</span>
-					<span class="tabular-nums text-xs">{taskStatus?.next_run ? new Date(taskStatus.next_run).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '-'}</span>
+					<span class="tabular-nums text-xs"
+						>{taskStatus?.next_run
+							? new Date(taskStatus.next_run).toLocaleString('zh-CN', {
+									month: '2-digit',
+									day: '2-digit',
+									hour: '2-digit',
+									minute: '2-digit'
+								})
+							: '未排期'}</span
+					>
 				</div>
 				<div class="flex items-center justify-between rounded-xl bg-white/70 px-3 py-2">
 					<span class="text-muted-foreground text-xs">上传调度</span>
@@ -602,9 +644,14 @@
 						{uploadStatus?.available ? (uploadStatus?.enabled ? '已启用' : '已暂停') : '未启用'}
 					</Badge>
 				</div>
-				<div class="flex items-center justify-between rounded-xl bg-white/70 px-3 py-2">
-					<span class="text-muted-foreground text-xs">下次上传</span>
-					<span class="tabular-nums text-xs">{hhmm(uploadStatus?.next_run_at)}</span>
+				<div class="flex items-start justify-between rounded-xl bg-white/70 px-3 py-2">
+					<div>
+						<p class="text-muted-foreground text-xs">下次上传</p>
+						<p class="text-muted-foreground mt-0.5 text-[10px]">
+							插件每 {intervalHours > 0 ? intervalHours : '-'} 小时自动一轮 · {nextUploadRel}
+						</p>
+					</div>
+					<span class="tabular-nums text-xs font-medium whitespace-nowrap">{nextUploadText}</span>
 				</div>
 				<div class="flex items-center justify-between rounded-xl bg-white/70 px-3 py-2">
 					<span class="text-muted-foreground text-xs">数据更新</span>

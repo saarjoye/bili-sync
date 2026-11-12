@@ -56,7 +56,20 @@ pub async fn auth(request: Request, next: Next) -> Response {
 
     // 1) 浏览器登录态（Cookie 会话）
     if auth::current_user(request.headers()).is_some() {
-        return next.run(request).await;
+        // 注意：浏览器发起 WebSocket 时若带了 Sec-WebSocket-Protocol，
+        // 服务端必须原样回显，否则浏览器判定握手失败（会导致仪表盘/日志一直"加载中"）
+        let protocol = request
+            .headers()
+            .get("Sec-WebSocket-Protocol")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        let mut resp = next.run(request).await;
+        if let Some(protocol) = protocol
+            && let Ok(value) = protocol.parse()
+        {
+            resp.headers_mut().insert("Sec-WebSocket-Protocol", value);
+        }
+        return resp;
     }
 
     // 2) 机器调用：Authorization: <auth_token>（原逻辑，保留兼容）

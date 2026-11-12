@@ -34,6 +34,7 @@ pub enum Notifier {
         ignore_cache: Option<()>,
     },
     /// 企业微信「应用消息」；base_url 可指向自建反代
+    #[serde(rename = "wecom")]
     WeCom {
         #[serde(default = "default_wecom_base")]
         base_url: String,

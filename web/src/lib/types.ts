@@ -517,3 +517,21 @@ export interface UploadStatus {
 	stuck?: UploadStuck[];
 	next_run_at?: string;
 }
+
+// ===== MoviePilot DirUpload115 插件配置（bili-sync 后端代理 GET/PUT /api/dirupload115/config）=====
+export interface DirUpload115ConfigResponse {
+	available: boolean;
+	reason?: string;
+	mp_api?: string;
+	plugin_id?: string;
+	config?: Record<string, unknown>;
+	editable?: string[];
+}
+
+export interface DirUpload115ConfigUpdate {
+	max_per_round?: number;
+	max_per_hour?: number;
+	interval_seconds?: number;
+	yield_to_mp?: boolean;
+	delete_mode?: string;
+}

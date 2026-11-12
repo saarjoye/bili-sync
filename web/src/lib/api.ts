@@ -5,6 +5,8 @@ import type {
 	CollectionsResponse,
 	Config,
 	DashBoardResponse,
+	DirUpload115ConfigResponse,
+	DirUpload115ConfigUpdate,
 	FavoritesResponse,
 	FullSyncVideoSourceRequest,
 	FullSyncVideoSourceResponse,
@@ -325,6 +327,17 @@ class ApiClient {
 		return this.get<UploadStatus>('/upload-status');
 	}
 
+	// ===== MoviePilot DirUpload115 插件配置（二开新增，由 Rust 后端代理）=====
+	async getDirUpload115Config(): Promise<ApiResponse<DirUpload115ConfigResponse>> {
+		return this.get<DirUpload115ConfigResponse>('/dirupload115/config');
+	}
+
+	async saveDirUpload115Config(
+		body: DirUpload115ConfigUpdate
+	): Promise<ApiResponse<DirUpload115ConfigResponse>> {
+		return this.put<DirUpload115ConfigResponse>('/dirupload115/config', body);
+	}
+
 	async runVideoSource(type: string, id: number): Promise<ApiResponse<boolean>> {
 		return this.post<boolean>(`/video-sources/${type}/${id}/run`);
 	}
@@ -468,6 +481,9 @@ const api = {
 	getVideoSourcesDetails: () => apiClient.getVideoSourcesDetails(),
 	runVideoSource: (type: string, id: number) => apiClient.runVideoSource(type, id),
 	getUploadStatus: () => apiClient.getUploadStatus(),
+	getDirUpload115Config: () => apiClient.getDirUpload115Config(),
+	saveDirUpload115Config: (body: DirUpload115ConfigUpdate) =>
+		apiClient.saveDirUpload115Config(body),
 	updateSchedule: (
 		type: string,
 		id: number,

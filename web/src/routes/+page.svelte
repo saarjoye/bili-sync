@@ -4,6 +4,9 @@
 	import { Progress } from '$lib/components/ui/progress/index.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
+	import { Input } from '$lib/components/ui/input/index.js';
+	import { Label } from '$lib/components/ui/label/index.js';
+	import { Switch } from '$lib/components/ui/switch/index.js';
 	import * as Chart from '$lib/components/ui/chart/index.js';
 	import MyChartTooltip from '$lib/components/custom/my-chart-tooltip.svelte';
 	import { curveNatural } from 'd3-shape';
@@ -12,7 +15,15 @@
 	import { toast } from 'svelte-sonner';
 	import CloudDownloadIcon from '@lucide/svelte/icons/cloud-download';
 	import api from '$lib/api';
-	import type { DashBoardResponse, SysInfo, ApiError, TaskStatus, UploadStatus } from '$lib/types';
+	import type {
+		DashBoardResponse,
+		DirUpload115ConfigResponse,
+		DirUpload115ConfigUpdate,
+		SysInfo,
+		ApiError,
+		TaskStatus,
+		UploadStatus
+	} from '$lib/types';
 	import CalendarIcon from '@lucide/svelte/icons/calendar';
 	import CircleCheckBigIcon from '@lucide/svelte/icons/circle-check-big';
 	import ClockIcon from '@lucide/svelte/icons/clock';
@@ -55,8 +66,36 @@
 		{ name: 'strm 就绪', value: Math.max(0, uploadedDone - (queue?.waiting ?? 0)), color: ['#8FA0FF', '#6C7BFF'] },
 		{ name: '已清理本地', value: uploadedDone, color: ['#FFC97A', '#FFB84D'] }
 	]);
-	let days = $derived(dashboardData?.videos_by_day ?? []);
-	let maxCnt = $derived(Math.max(1, ...(dashboardData?.videos_by_day ?? []).map((d) => d.cnt)));
+	// ===== 近 12 小时上传量（uploadStatus.hourly，可能只有 1 条）=====
+	let hourlyList = $derived((uploadStatus?.hourly ?? []).slice(-12));
+	let hourlyGroupMax = $derived(hourlyList.reduce((m, h) => Math.max(m, h.count), 0));
+	let hourlyCap = $derived(uploadStatus?.max_per_hour ?? 0);
+	// 柱高按本组最大值归一；归一基准再与每小时上限取大并留 15% 余量，保证上限虚线不贴顶
+	let hourlyScale = $derived(Math.max(1, Math.max(hourlyGroupMax, hourlyCap) * 1.15));
+
+	function hourlyBarPct(count: number): number {
+		return Math.max(3, Math.round((count / hourlyScale) * 100));
+	}
+
+	function hourlyCapPct(): number {
+		if (hourlyCap <= 0) return 0;
+		return Math.min(100, Math.round((hourlyCap / hourlyScale) * 100));
+	}
+
+	function shortHour(label: string): string {
+		const parts = label.split(' ');
+		return parts.length > 1 ? parts[parts.length - 1] : label;
+	}
+
+	// ===== 目录分布 / 滞留 =====
+	let dirStats = $derived(uploadStatus?.by_dir ?? []);
+	let stuckList = $derived(uploadStatus?.stuck ?? []);
+
+	function segPct(part: number, total: number): number {
+		if (total <= 0) return 0;
+		return Math.round((part / total) * 1000) / 10;
+	}
+
 	let diskTotal = $derived(sysInfo?.total_disk ?? 0);
 	let diskUsed = $derived(sysInfo?.used_disk ?? 0);
 	let diskPct = $derived(diskTotal > 0 ? Math.round((diskUsed / diskTotal) * 100) : 0);
@@ -66,6 +105,74 @@
 			uploadStatus = (await api.getUploadStatus()).data;
 		} catch {
 			uploadStatus = null;
+		}
+	}
+
+	// ===== 调度参数（MoviePilot 插件 DirUpload115 配置，由 bili-sync 后端代理）=====
+	let mpConfig = $state<DirUpload115ConfigResponse | null>(null);
+	let configLoading = $state(false);
+	let savingConfig = $state(false);
+	let cfgMaxPerRound = $state<number>(20);
+	let cfgMaxPerHour = $state<number>(60);
+	let cfgIntervalHours = $state<number>(6);
+	let cfgYieldToMp = $state<boolean>(true);
+	let cfgDeleteMode = $state<string>('delete');
+
+	let configAvailable = $derived(mpConfig?.available ?? false);
+	let configReason = $derived(mpConfig?.reason ?? '');
+
+	async function loadDirUpload115Config() {
+		configLoading = true;
+		try {
+			const response = await api.getDirUpload115Config();
+			const data = response.data;
+			mpConfig = data;
+			const cfg = (data?.config ?? {}) as Record<string, unknown>;
+			const perRound = Number(cfg['max_per_round']);
+			if (Number.isFinite(perRound) && perRound > 0) cfgMaxPerRound = perRound;
+			const perHour = Number(cfg['max_per_hour']);
+			if (Number.isFinite(perHour) && perHour > 0) cfgMaxPerHour = perHour;
+			const intervalSeconds = Number(cfg['interval_seconds']);
+			if (Number.isFinite(intervalSeconds) && intervalSeconds > 0) {
+				cfgIntervalHours = Math.round((intervalSeconds / 3600) * 100) / 100;
+			}
+			const yieldToMp = cfg['yield_to_mp'];
+			if (typeof yieldToMp === 'boolean') cfgYieldToMp = yieldToMp;
+			const deleteMode = cfg['delete_mode'];
+			if (typeof deleteMode === 'string' && ['delete', 'recycle', 'keep'].includes(deleteMode)) {
+				cfgDeleteMode = deleteMode;
+			}
+		} catch (error) {
+			console.error('加载调度参数失败：', error);
+			mpConfig = { available: false, reason: (error as ApiError).message };
+		} finally {
+			configLoading = false;
+		}
+	}
+
+	async function handleSaveConfig() {
+		if (!configAvailable || savingConfig) return;
+		savingConfig = true;
+		try {
+			const body: DirUpload115ConfigUpdate = {
+				max_per_round: Math.round(Number(cfgMaxPerRound)),
+				max_per_hour: Math.round(Number(cfgMaxPerHour)),
+				interval_seconds: Math.round(Number(cfgIntervalHours) * 3600),
+				yield_to_mp: Boolean(cfgYieldToMp),
+				delete_mode: cfgDeleteMode
+			};
+			await api.saveDirUpload115Config(body);
+			toast.success('调度参数已保存到 MoviePilot');
+			// 让上方卡片立刻同步：先刷 status.json，再重拉插件配置
+			await loadUploadStatus();
+			await loadDirUpload115Config();
+		} catch (error) {
+			console.error('保存调度参数失败：', error);
+			toast.error('保存调度参数失败', {
+				description: (error as ApiError).message
+			});
+		} finally {
+			savingConfig = false;
 		}
 	}
 
@@ -206,6 +313,7 @@
 
 	onMount(() => {
 		loadUploadStatus();
+		loadDirUpload115Config();
 		const timer = setInterval(loadUploadStatus, 60000);
 		return () => clearInterval(timer);
 	});
@@ -404,24 +512,113 @@
 		</div>
 	</div>
 
-	<!-- ========== 折线 + 存储 ========== -->
+	<!-- ========== 近 12 小时上传量 + 目录分布 + 存储 ========== -->
 	<div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
-		<div class="rounded-2xl border border-white/70 bg-white/75 p-5 shadow-[0_8px_24px_rgba(31,79,120,0.08)] backdrop-blur lg:col-span-2">
+		<!-- 近 12 小时上传量 -->
+		<div class="rounded-2xl border border-white/70 bg-white/75 p-5 shadow-[0_8px_24px_rgba(31,79,120,0.08)] backdrop-blur">
 			<div class="mb-2 flex items-center justify-between">
-				<h3 class="text-sm font-semibold">近 14 日入库</h3>
-				<span class="text-muted-foreground text-[11px]">视频</span>
+				<h3 class="text-sm font-semibold">近 12 小时上传量</h3>
+				{#if hourlyCap > 0}
+					<span class="rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-medium whitespace-nowrap text-rose-500">
+						上限 {hourlyCap}/小时
+					</span>
+				{/if}
 			</div>
-			<div class="flex h-40 items-end gap-1.5">
-				{#each days as d}
-					<div class="group flex flex-1 flex-col items-center justify-end gap-1">
-						<span class="text-muted-foreground text-[9px] tabular-nums opacity-0 group-hover:opacity-100">{d.cnt}</span>
-						<div
-							class="w-full rounded-t-md bg-gradient-to-t from-sky-300 to-emerald-400 transition-all"
-							style="height: {Math.max(4, (d.cnt / maxCnt) * 100)}%"
-						></div>
-						<span class="text-muted-foreground text-[9px]">{d.day.slice(5)}</span>
+			{#if hourlyList.length === 0}
+				<p class="text-muted-foreground py-10 text-center text-xs">暂无数据（等待下一轮上传统计）</p>
+			{:else}
+				<div class="relative h-32">
+					<div class="flex h-full items-end gap-1.5">
+						{#each hourlyList as h}
+							<div class="group flex h-full flex-1 items-end justify-center" title="{h.hour} · {h.count} 集">
+								<div
+									class="relative w-full max-w-[46px] rounded-t-md bg-gradient-to-t from-sky-300 to-emerald-400 transition-all"
+									style="height: {hourlyBarPct(h.count)}%"
+								>
+									<span
+										class="absolute -top-5 left-1/2 -translate-x-1/2 rounded-full bg-white/95 px-1.5 py-0.5 text-[10px] font-medium tabular-nums opacity-0 shadow-sm transition group-hover:opacity-100"
+									>
+										{h.count}
+									</span>
+								</div>
+							</div>
+						{/each}
 					</div>
-				{/each}
+					{#if hourlyCap > 0}
+						<div
+							class="pointer-events-none absolute inset-x-0 z-10 border-t border-dashed border-rose-400/80"
+							style="bottom: {hourlyCapPct()}%"
+						></div>
+					{/if}
+				</div>
+				<div class="mt-1.5 flex gap-1.5">
+					{#each hourlyList as h}
+						<div class="text-muted-foreground flex-1 truncate text-center text-[9px] tabular-nums">
+							{shortHour(h.hour)}
+						</div>
+					{/each}
+				</div>
+				<div class="text-muted-foreground mt-2 flex items-center justify-between text-[10px]">
+					<span>共 {hourlyList.length} 个时段</span>
+					<span class="flex items-center gap-1">
+						<span class="inline-block h-0 w-4 border-t border-dashed border-rose-400/80"></span>
+						每小时上限
+					</span>
+				</div>
+			{/if}
+		</div>
+
+		<!-- 目录分布 + 滞留 -->
+		<div class="rounded-2xl border border-white/70 bg-white/75 p-5 shadow-[0_8px_24px_rgba(31,79,120,0.08)] backdrop-blur">
+			<div class="mb-2 flex items-center justify-between">
+				<h3 class="text-sm font-semibold">目录分布</h3>
+				<span class="text-muted-foreground text-[10px]">{dirStats.length} 个目录</span>
+			</div>
+			{#if dirStats.length === 0}
+				<p class="text-muted-foreground py-4 text-center text-xs">暂无数据（等待下一轮上传统计）</p>
+			{:else}
+				<div class="max-h-44 space-y-2.5 overflow-auto pr-1">
+					{#each dirStats as d}
+						<div>
+							<div class="mb-1 flex items-center justify-between text-[11px]">
+								<span class="flex-1 truncate font-medium">{d.dir}</span>
+								<span class="text-muted-foreground ml-2 shrink-0 tabular-nums">
+									{d.done}/{d.total}（{d.total > 0 ? Math.round((d.done / d.total) * 100) : 0}%）
+								</span>
+							</div>
+							<div class="flex h-2.5 w-full overflow-hidden rounded-full bg-slate-200/70">
+								<div class="h-full" style="width: {segPct(d.done, d.total)}%; background: #2ED3A8"></div>
+								<div class="h-full" style="width: {segPct(d.pending, d.total)}%; background: #4C8DFF"></div>
+								<div class="h-full" style="width: {segPct(d.waiting, d.total)}%; background: #FFB84D"></div>
+							</div>
+						</div>
+					{/each}
+				</div>
+				<div class="text-muted-foreground mt-2 flex flex-wrap items-center gap-3 text-[10px]">
+					<span class="flex items-center gap-1">
+						<span class="h-2 w-2 rounded-full" style="background: #2ED3A8"></span>已完成
+					</span>
+					<span class="flex items-center gap-1">
+						<span class="h-2 w-2 rounded-full" style="background: #4C8DFF"></span>待上传
+					</span>
+					<span class="flex items-center gap-1">
+						<span class="h-2 w-2 rounded-full" style="background: #FFB84D"></span>等 strm
+					</span>
+				</div>
+			{/if}
+			<div class="mt-3 rounded-xl bg-white/70 p-2.5">
+				<p class="text-[10px] font-medium">滞留</p>
+				{#if stuckList.length === 0}
+					<p class="text-muted-foreground mt-0.5 text-[11px]">无滞留</p>
+				{:else}
+					<div class="mt-1.5 flex flex-wrap gap-1.5">
+						{#each stuckList as s}
+							<span class="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] text-amber-700">
+								{s.name} · 已滞留 {s.minutes} 分钟
+							</span>
+						{/each}
+					</div>
+				{/if}
 			</div>
 		</div>
 
@@ -457,6 +654,111 @@
 			<Button class="mt-3 w-full" onclick={handleTriggerDownload} disabled={triggering}>
 				<PlayIcon class="mr-1 h-4 w-4" />
 				{triggering ? '触发中…' : '立即执行下载任务'}
+			</Button>
+		</div>
+	</div>
+
+	<!-- ========== 调度参数（MoviePilot 插件 DirUpload115） ========== -->
+	<div class="mt-4 rounded-2xl border border-white/70 bg-white/75 p-5 shadow-[0_8px_24px_rgba(31,79,120,0.08)] backdrop-blur">
+		<div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+			<div class="flex items-center gap-2">
+				<h3 class="text-sm font-semibold">调度参数</h3>
+				{#if mpConfig && !configAvailable}
+					<Badge variant="secondary">只读</Badge>
+				{/if}
+			</div>
+			<Button variant="ghost" size="sm" onclick={loadDirUpload115Config} disabled={configLoading}>
+				{configLoading ? '刷新中…' : '刷新配置'}
+			</Button>
+		</div>
+
+		{#if mpConfig && !configAvailable}
+			<p class="text-muted-foreground mb-4 rounded-xl bg-white/70 px-3 py-2 text-[11px]">
+				只读：{configReason || 'MoviePilot 插件配置不可用'}
+			</p>
+		{/if}
+
+		<div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+			<div class="space-y-1.5">
+				<Label for="cfg-max-per-round">每轮上限</Label>
+				<Input
+					id="cfg-max-per-round"
+					type="number"
+					min="1"
+					max="200"
+					step="1"
+					bind:value={cfgMaxPerRound}
+					disabled={!configAvailable || savingConfig}
+				/>
+				<p class="text-muted-foreground text-[10px]">1–200 集</p>
+			</div>
+
+			<div class="space-y-1.5">
+				<Label for="cfg-max-per-hour">每小时上限</Label>
+				<Input
+					id="cfg-max-per-hour"
+					type="number"
+					min="1"
+					max="2000"
+					step="1"
+					bind:value={cfgMaxPerHour}
+					disabled={!configAvailable || savingConfig}
+				/>
+				<p class="text-muted-foreground text-[10px]">1–2000 集</p>
+			</div>
+
+			<div class="space-y-1.5">
+				<Label for="cfg-interval">周期</Label>
+				<Input
+					id="cfg-interval"
+					type="number"
+					min="0.5"
+					max="24"
+					step="0.5"
+					bind:value={cfgIntervalHours}
+					disabled={!configAvailable || savingConfig}
+				/>
+				<p class="text-muted-foreground text-[10px]">
+					单位小时 · 保存时换算 {Math.round(Number(cfgIntervalHours) * 3600)} 秒（600–86400）
+				</p>
+			</div>
+
+			<div class="space-y-1.5">
+				<Label for="cfg-yield-to-mp">让路 MP</Label>
+				<div class="flex h-9 items-center gap-2 rounded-md bg-white/70 px-3">
+					<Switch
+						id="cfg-yield-to-mp"
+						bind:checked={cfgYieldToMp}
+						disabled={!configAvailable || savingConfig}
+					/>
+					<span class="text-xs">{cfgYieldToMp ? '开启' : '关闭'}</span>
+				</div>
+				<p class="text-muted-foreground text-[10px]">MoviePilot 忙碌时暂停上传</p>
+			</div>
+
+			<div class="space-y-1.5">
+				<Label for="cfg-delete-mode">删除策略</Label>
+				<select
+					id="cfg-delete-mode"
+					class="border-input bg-background h-9 w-full rounded-md border px-3 text-sm shadow-xs outline-none disabled:cursor-not-allowed disabled:opacity-50"
+					bind:value={cfgDeleteMode}
+					disabled={!configAvailable || savingConfig}
+				>
+					<option value="delete">就绪后删除</option>
+					<option value="recycle">移入回收站</option>
+					<option value="keep">保留</option>
+				</select>
+				<p class="text-muted-foreground text-[10px]">上传/strm 就绪后如何处理本地文件</p>
+			</div>
+		</div>
+
+		<div class="mt-4 flex flex-wrap items-end justify-between gap-3 border-t border-white/60 pt-3">
+			<div class="text-muted-foreground space-y-0.5 text-[10px]">
+				<p>下次运行：{uploadStatus?.next_run_at ?? '-'}</p>
+				<p>数据来自 MoviePilot 插件 DirUpload115</p>
+			</div>
+			<Button onclick={handleSaveConfig} disabled={!configAvailable || savingConfig || configLoading}>
+				{savingConfig ? '保存中…' : '保存'}
 			</Button>
 		</div>
 	</div>

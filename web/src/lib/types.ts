@@ -516,6 +516,10 @@ export interface UploadStatus {
 	by_dir?: UploadDirStat[];
 	stuck?: UploadStuck[];
 	next_run_at?: string;
+	/** 115 风控暂停截止时间（非空且在未来 = 暂停中） */
+	risk_paused_until?: string;
+	/** 本轮被跳过的原因（风控暂停 / MP 繁忙 / 配置缺失），正常跑完为空 */
+	paused_reason?: string;
 	/** 由 bili-sync 后端在保存插件配置时写入：MP 会重注册定时器，下次上传 ≈ 该时刻 + 周期 */
 	config_saved_at?: string;
 }

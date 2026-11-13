@@ -229,19 +229,48 @@
 			(statusUpdatedAt === null || configSavedAt.getTime() > statusUpdatedAt.getTime())
 	);
 	let pluginNextAt = $derived(parseStamp(uploadStatus?.next_run_at));
+	// 1.5.6 起插件被跳过（风控暂停/上一轮没跑完）也会刷新 status.json，这里据此区分三种状态
+	let riskPausedUntil = $derived(parseStamp(uploadStatus?.risk_paused_until));
+	let pausedReason = $derived(uploadStatus?.paused_reason ?? '');
+	let riskPaused = $derived(riskPausedUntil !== null && riskPausedUntil.getTime() > clock);
 	let nextUploadAt = $derived(
 		savedAfterStatus && intervalSeconds > 0 && configSavedAt
 			? new Date(configSavedAt.getTime() + intervalSeconds * 1000)
 			: pluginNextAt
 	);
-	let nextUploadText = $derived(fmtClock(nextUploadAt));
-	let nextUploadCountdown = $derived(fmtCountdown(nextUploadAt, clock));
+	let nextUploadOverdue = $derived(
+		!riskPaused && nextUploadAt !== null && nextUploadAt.getTime() < clock
+	);
+	let nextUploadText = $derived(
+		riskPaused
+			? `暂停至 ${riskPausedUntil ? fmtClock(riskPausedUntil).replace(/^今天 /, '') : '-'}`
+			: nextUploadOverdue
+				? '等待触发'
+				: fmtClock(nextUploadAt)
+	);
+	let nextUploadCountdown = $derived(
+		riskPaused ? fmtCountdown(riskPausedUntil, clock) : fmtCountdown(nextUploadAt, clock)
+	);
+	let nextUploadCountdownLabel = $derived(
+		riskPaused ? '恢复' : nextUploadOverdue ? '已逾期' : '还剩'
+	);
 	let nextUploadHint = $derived(
-		savedAfterStatus
-			? '按「保存配置时刻 + 周期」估算，下一轮跑完转为插件实测值'
-			: `插件每 ${intervalLabel} 自动一轮`
+		riskPaused
+			? pausedReason || '115 风控冷却中，暂停上传'
+			: nextUploadOverdue
+				? `已到上一轮预计时间，等待 MoviePilot 调度触发（上次运行 ${shortClock(statusUpdatedAt)}）`
+				: savedAfterStatus
+					? '按「保存配置时刻 + 周期」估算，下一轮跑完转为插件实测值'
+					: `上次运行 ${shortClock(statusUpdatedAt)} · 插件每 ${intervalLabel} 自动一轮`
 	);
 	let pluginNextText = $derived(fmtClock(pluginNextAt));
+
+	// 只取 HH:mm（给「上次运行」这类提示用）
+	function shortClock(d: Date | null): string {
+		if (!d) return '-';
+		const pad = (n: number) => String(n).padStart(2, '0');
+		return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+	}
 
 	// 下载任务的下次时间（taskStatus.next_run 是时间戳/ISO 字符串）
 	let nextDownloadAt = $derived(taskStatus?.next_run ? new Date(taskStatus.next_run) : null);
@@ -659,7 +688,17 @@
 				</div>
 			{:else}
 				<div class="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-[11px] text-emerald-700">
-					队列健康：无失败、无滞留；下一轮 {nextUploadText}（还剩 {nextUploadCountdown}）开始，按当前配速预计再传 {etaRounds} 轮
+					{#if riskPaused}
+						<span class="text-amber-700">
+							115 风控暂停中：{pausedReason || '冷却尚未结束'}；预计 {nextUploadText}
+						</span>
+					{:else if nextUploadOverdue}
+						<span class="text-rose-600">
+							已到预计时间但还没触发（上次运行 {shortClock(statusUpdatedAt)}），正在等 MoviePilot 调度；按当前配速预计还需 {etaRounds} 轮
+						</span>
+					{:else}
+						队列健康：无失败、无滞留；下一轮 {nextUploadText}（还剩 {nextUploadCountdown}）开始，按当前配速预计再传 {etaRounds} 轮
+					{/if}
 				</div>
 			{/if}
 		</div>
@@ -702,11 +741,17 @@
 							>{nextUploadText}</span
 						>
 					</div>
-					<div class="mt-1 flex items-center justify-between">
-						<span class="text-muted-foreground text-[10px]">{nextUploadHint}</span>
-						<span class="flex items-baseline gap-1">
-							<span class="text-muted-foreground text-[10px]">还剩</span>
-							<span class="tabular-nums text-base font-bold text-slate-700">{nextUploadCountdown || '—'}</span>
+					<div class="mt-1 flex items-center justify-between gap-2">
+						<span class="text-muted-foreground flex-1 text-[10px] leading-tight">{nextUploadHint}</span>
+						<span class="flex shrink-0 items-baseline gap-1">
+							<span class="text-muted-foreground text-[10px]">{nextUploadCountdownLabel}</span>
+							<span
+								class="tabular-nums text-base font-bold {riskPaused
+									? 'text-amber-600'
+									: nextUploadOverdue
+										? 'text-rose-500'
+										: 'text-slate-700'}">{nextUploadCountdown || '—'}</span
+							>
 						</span>
 					</div>
 				</div>

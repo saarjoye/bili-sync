@@ -806,6 +806,44 @@
 
 					<Separator />
 
+					<div class="space-y-3">
+						<div>
+							<h3 class="text-lg font-semibold">通知事件</h3>
+							<p class="text-muted-foreground text-sm">
+								选择哪些事件才推送，关掉的一律不发送（测试消息不受影响）
+							</p>
+						</div>
+						<div class="flex items-center justify-between rounded-lg border p-4">
+							<div class="space-y-1">
+								<Label for="notify-download-success">下载成功 / 新视频入库</Label>
+								<p class="text-muted-foreground text-sm">
+									订阅检查到新视频并下载完成后推送（含标题列表或「本轮共 N 个」汇总）
+								</p>
+							</div>
+							<Switch id="notify-download-success" bind:checked={formData.notify_download_success} />
+						</div>
+						<div class="flex items-center justify-between rounded-lg border p-4">
+							<div class="space-y-1">
+								<Label for="notify-download-error">下载失败 / 处理异常</Label>
+								<p class="text-muted-foreground text-sm">
+									视频下载失败、订阅连续失败、任务异常时推送
+								</p>
+							</div>
+							<Switch id="notify-download-error" bind:checked={formData.notify_download_error} />
+						</div>
+						<div class="flex items-center justify-between rounded-lg border p-4">
+							<div class="space-y-1">
+								<Label for="notify-progress">订阅检查进度（每轮开始/结束）</Label>
+								<p class="text-muted-foreground text-sm">
+									每个订阅「开始处理」+「本轮完成」都推送，容易刷屏，默认关闭
+								</p>
+							</div>
+							<Switch id="notify-progress" bind:checked={formData.notify_progress} />
+						</div>
+					</div>
+
+					<Separator />
+
 					<div class="flex items-center justify-between rounded-lg border p-4">
 						<div class="space-y-1">
 							<Label for="ignore-common-errors">忽略常见错误</Label>

@@ -382,6 +382,12 @@ export interface Config {
 	page_name: string;
 	notifiers: Notifier[] | null;
 	ignore_common_errors: boolean;
+	/** 通知事件开关：下载成功 / 新视频入库 */
+	notify_download_success: boolean;
+	/** 通知事件开关：下载失败 / 处理异常 */
+	notify_download_error: boolean;
+	/** 通知事件开关：订阅检查进度（开始/结束），默认关闭 */
+	notify_progress: boolean;
 	favorite_default_path: string;
 	collection_default_path: string;
 	submission_default_path: string;

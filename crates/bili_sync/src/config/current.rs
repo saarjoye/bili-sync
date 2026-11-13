@@ -11,8 +11,8 @@ use validator::Validate;
 use crate::bilibili::{Credential, DanmakuOption, FilterOption};
 use crate::config::args::ARGS;
 use crate::config::default::{
-    default_auth_token, default_bind_address, default_collection_path, default_favorite_path, default_submission_path,
-    default_time_format,
+    default_auth_token, default_bind_address, default_collection_path, default_favorite_path, default_notify_on,
+    default_submission_path, default_time_format,
 };
 use crate::config::item::{ConcurrentLimit, DanmakuUpdatePolicy, NFOTimeType, SkipOption, Trigger};
 use crate::notifier::Notifier;
@@ -42,6 +42,15 @@ pub struct Config {
     pub notifiers: Option<Arc<Vec<Notifier>>>,
     #[serde(default)]
     pub ignore_common_errors: bool,
+    /// 通知开关：新视频入库（下载成功）时是否推送
+    #[serde(default = "default_notify_on")]
+    pub notify_download_success: bool,
+    /// 通知开关：下载/处理失败时是否推送
+    #[serde(default = "default_notify_on")]
+    pub notify_download_error: bool,
+    /// 通知开关：订阅检查的进度类消息（开始处理 / 本轮完成）——默认关闭，否则每轮刷屏
+    #[serde(default)]
+    pub notify_progress: bool,
     #[serde(default = "default_favorite_path")]
     pub favorite_default_path: String,
     #[serde(default = "default_collection_path")]
@@ -131,6 +140,9 @@ impl Default for Config {
             page_name: "{{bvid}}".to_owned(),
             notifiers: None,
             ignore_common_errors: false,
+            notify_download_success: true,
+            notify_download_error: true,
+            notify_progress: false,
             favorite_default_path: default_favorite_path(),
             collection_default_path: default_collection_path(),
             submission_default_path: default_submission_path(),

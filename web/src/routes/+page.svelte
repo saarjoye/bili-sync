@@ -233,6 +233,14 @@
 	let riskPausedUntil = $derived(parseStamp(uploadStatus?.risk_paused_until));
 	let pausedReason = $derived(uploadStatus?.paused_reason ?? '');
 	let riskPaused = $derived(riskPausedUntil !== null && riskPausedUntil.getTime() > clock);
+	// 1.5.8：本轮是否正在跑（大文件分片上传时一轮可能几十分钟，不能只按"到点没到点"判断）
+	let roundRunning = $derived(uploadStatus?.round_running === true);
+	let roundStartedAt = $derived(parseStamp(uploadStatus?.round_started_at));
+	let roundElapsedMin = $derived(
+		roundRunning && roundStartedAt
+			? Math.max(0, Math.floor((clock - roundStartedAt.getTime()) / 60000))
+			: 0
+	);
 	// 插件的「基准下次时间」
 	let nextUploadBase = $derived(
 		savedAfterStatus && intervalSeconds > 0 && configSavedAt
@@ -267,11 +275,13 @@
 	let nextUploadHint = $derived(
 		riskPaused
 			? pausedReason || '115 风控冷却中，暂停上传'
-			: nextUploadDelayed
-				? `上一轮比预计晚（MP 调度延迟或上一轮跑得久），按每 ${intervalLabel} 顺延；上次运行 ${shortClock(statusUpdatedAt)}`
-				: savedAfterStatus
-					? '按「保存配置时刻 + 周期」估算，下一轮跑完转为插件实测值'
-					: `上次运行 ${shortClock(statusUpdatedAt)} · 每 ${intervalLabel} 一轮`
+			: roundRunning
+				? `本轮上传中（${shortClock(roundStartedAt)} 开始，已跑 ${roundElapsedMin} 分钟，大文件分片较慢）；每 ${intervalLabel} 一轮`
+				: nextUploadDelayed
+					? `上一轮比预计晚（MP 调度延迟或上一轮跑得久），按每 ${intervalLabel} 顺延；上次运行 ${shortClock(statusUpdatedAt)}`
+					: savedAfterStatus
+						? '按「保存配置时刻 + 周期」估算，下一轮跑完转为插件实测值'
+						: `上次运行 ${shortClock(statusUpdatedAt)} · 每 ${intervalLabel} 一轮`
 	);
 	let pluginNextText = $derived(fmtClock(pluginNextAt));
 
@@ -702,6 +712,10 @@
 						<span class="text-amber-700">
 							115 风控暂停中：{pausedReason || '冷却尚未结束'}；预计 {nextUploadText}
 						</span>
+					{:else if roundRunning}
+						<span class="text-emerald-700">
+							正在上传：本轮 {shortClock(roundStartedAt)} 开始，已跑 {roundElapsedMin} 分钟（大文件分片较慢属正常）；下一轮预计 {nextUploadText}
+						</span>
 					{:else if nextUploadDelayed}
 						<span class="text-amber-700">
 							上一轮比预计晚（MP 调度有延迟或上一轮跑得久），下一轮按周期顺延到 {nextUploadText}；按当前配速预计还需 {etaRounds} 轮
@@ -744,7 +758,15 @@
 				</div>
 				<div class="rounded-xl bg-white/70 px-3 py-2">
 					<div class="flex items-center justify-between">
-						<span class="text-muted-foreground text-xs">下次上传</span>
+						<span class="text-muted-foreground flex items-center gap-1.5 text-xs">
+							下次上传
+							{#if roundRunning}
+								<span class="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] text-emerald-700">
+									<span class="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500"></span>
+									上传中
+								</span>
+							{/if}
+						</span>
 						<span
 							class="tabular-nums text-xs font-medium whitespace-nowrap"
 							title="插件 status.json 记录：{pluginNextText}"

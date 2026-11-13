@@ -522,6 +522,8 @@ export interface UploadStatus {
 	by_dir?: UploadDirStat[];
 	stuck?: UploadStuck[];
 	next_run_at?: string;
+	/** 本轮是否正在执行（大文件分片上传时一轮可能很久） */
+	round_running?: boolean;
 	/** 115 风控暂停截止时间（非空且在未来 = 暂停中） */
 	risk_paused_until?: string;
 	/** 本轮被跳过的原因（风控暂停 / MP 繁忙 / 配置缺失），正常跑完为空 */

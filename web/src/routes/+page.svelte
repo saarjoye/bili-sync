@@ -233,35 +233,45 @@
 	let riskPausedUntil = $derived(parseStamp(uploadStatus?.risk_paused_until));
 	let pausedReason = $derived(uploadStatus?.paused_reason ?? '');
 	let riskPaused = $derived(riskPausedUntil !== null && riskPausedUntil.getTime() > clock);
-	let nextUploadAt = $derived(
+	// 插件的「基准下次时间」
+	let nextUploadBase = $derived(
 		savedAfterStatus && intervalSeconds > 0 && configSavedAt
 			? new Date(configSavedAt.getTime() + intervalSeconds * 1000)
 			: pluginNextAt
 	);
-	let nextUploadOverdue = $derived(
-		!riskPaused && nextUploadAt !== null && nextUploadAt.getTime() < clock
+	// 关键：把基准时间按周期往后滚，直到落在未来 —— 这样即使 MP 定时器晚触发，
+	// 用户看到的永远是一个「具体的、未来的」时间，而不是「已逾期 +01:33」这种没法用的信息
+	let nextUploadAt = $derived.by(() => {
+		const base = nextUploadBase;
+		if (!base) return null;
+		const iv = intervalSeconds * 1000;
+		if (iv <= 0 || base.getTime() > clock) return base;
+		const k = Math.ceil((clock - base.getTime()) / iv);
+		return new Date(base.getTime() + k * iv);
+	});
+	// 基准时间已过期 → 说明这一轮比预计晚（MP 调度延迟 / 上一轮跑得久），用「预计」措辞
+	let nextUploadDelayed = $derived(
+		!riskPaused && nextUploadBase !== null && nextUploadBase.getTime() < clock
 	);
 	let nextUploadText = $derived(
 		riskPaused
 			? `暂停至 ${riskPausedUntil ? fmtClock(riskPausedUntil).replace(/^今天 /, '') : '-'}`
-			: nextUploadOverdue
-				? '等待触发'
-				: fmtClock(nextUploadAt)
+			: nextUploadAt
+				? `${nextUploadDelayed ? '预计 ' : ''}${fmtClock(nextUploadAt).replace(/^今天 /, '今天 ')}`
+				: '-'
 	);
 	let nextUploadCountdown = $derived(
 		riskPaused ? fmtCountdown(riskPausedUntil, clock) : fmtCountdown(nextUploadAt, clock)
 	);
-	let nextUploadCountdownLabel = $derived(
-		riskPaused ? '恢复' : nextUploadOverdue ? '已逾期' : '还剩'
-	);
+	let nextUploadCountdownLabel = $derived(riskPaused ? '恢复' : '还剩');
 	let nextUploadHint = $derived(
 		riskPaused
 			? pausedReason || '115 风控冷却中，暂停上传'
-			: nextUploadOverdue
-				? `已到上一轮预计时间，等待 MoviePilot 调度触发（上次运行 ${shortClock(statusUpdatedAt)}）`
+			: nextUploadDelayed
+				? `上一轮比预计晚（MP 调度延迟或上一轮跑得久），按每 ${intervalLabel} 顺延；上次运行 ${shortClock(statusUpdatedAt)}`
 				: savedAfterStatus
 					? '按「保存配置时刻 + 周期」估算，下一轮跑完转为插件实测值'
-					: `上次运行 ${shortClock(statusUpdatedAt)} · 插件每 ${intervalLabel} 自动一轮`
+					: `上次运行 ${shortClock(statusUpdatedAt)} · 每 ${intervalLabel} 一轮`
 	);
 	let pluginNextText = $derived(fmtClock(pluginNextAt));
 
@@ -692,9 +702,9 @@
 						<span class="text-amber-700">
 							115 风控暂停中：{pausedReason || '冷却尚未结束'}；预计 {nextUploadText}
 						</span>
-					{:else if nextUploadOverdue}
-						<span class="text-rose-600">
-							已到预计时间但还没触发（上次运行 {shortClock(statusUpdatedAt)}），正在等 MoviePilot 调度；按当前配速预计还需 {etaRounds} 轮
+					{:else if nextUploadDelayed}
+						<span class="text-amber-700">
+							上一轮比预计晚（MP 调度有延迟或上一轮跑得久），下一轮按周期顺延到 {nextUploadText}；按当前配速预计还需 {etaRounds} 轮
 						</span>
 					{:else}
 						队列健康：无失败、无滞留；下一轮 {nextUploadText}（还剩 {nextUploadCountdown}）开始，按当前配速预计再传 {etaRounds} 轮
@@ -748,8 +758,8 @@
 							<span
 								class="tabular-nums text-base font-bold {riskPaused
 									? 'text-amber-600'
-									: nextUploadOverdue
-										? 'text-rose-500'
+									: nextUploadDelayed
+										? 'text-amber-600'
 										: 'text-slate-700'}">{nextUploadCountdown || '—'}</span
 							>
 						</span>

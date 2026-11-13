@@ -11,6 +11,7 @@ use crate::config::VersionedConfig;
 
 mod authapi;
 mod dirs;
+mod dirupload115_config;
 mod upload_status;
 mod config;
 mod dashboard;
@@ -39,6 +40,8 @@ pub fn router() -> Router {
             .merge(authapi::router())
             .merge(dirs::router())
         .merge(upload_status::router())
+            // MP DirUpload115 插件配置代理（GET/PUT），由后端代转以免跨域 + 泄露 token
+            .merge(dirupload115_config::router())
             .merge(wizard::router())
             .layer(middleware::from_fn(auth)),
     )

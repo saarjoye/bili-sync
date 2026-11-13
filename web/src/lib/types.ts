@@ -382,6 +382,12 @@ export interface Config {
 	page_name: string;
 	notifiers: Notifier[] | null;
 	ignore_common_errors: boolean;
+	/** 通知事件开关：下载成功 / 新视频入库 */
+	notify_download_success: boolean;
+	/** 通知事件开关：下载失败 / 处理异常 */
+	notify_download_error: boolean;
+	/** 通知事件开关：订阅检查进度（开始/结束），默认关闭 */
+	notify_progress: boolean;
 	favorite_default_path: string;
 	collection_default_path: string;
 	submission_default_path: string;
@@ -516,4 +522,28 @@ export interface UploadStatus {
 	by_dir?: UploadDirStat[];
 	stuck?: UploadStuck[];
 	next_run_at?: string;
+	/** 115 风控暂停截止时间（非空且在未来 = 暂停中） */
+	risk_paused_until?: string;
+	/** 本轮被跳过的原因（风控暂停 / MP 繁忙 / 配置缺失），正常跑完为空 */
+	paused_reason?: string;
+	/** 由 bili-sync 后端在保存插件配置时写入：MP 会重注册定时器，下次上传 ≈ 该时刻 + 周期 */
+	config_saved_at?: string;
+}
+
+// ===== MoviePilot DirUpload115 插件配置（bili-sync 后端代理 GET/PUT /api/dirupload115/config）=====
+export interface DirUpload115ConfigResponse {
+	available: boolean;
+	reason?: string;
+	mp_api?: string;
+	plugin_id?: string;
+	config?: Record<string, unknown>;
+	editable?: string[];
+}
+
+export interface DirUpload115ConfigUpdate {
+	max_per_round?: number;
+	max_per_hour?: number;
+	interval_seconds?: number;
+	yield_to_mp?: boolean;
+	delete_mode?: string;
 }

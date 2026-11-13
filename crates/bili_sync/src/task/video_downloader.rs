@@ -371,7 +371,7 @@ async fn download_video(
     for video_source in video_sources {
         processed += 1;
         let display_name = video_source.display_name();
-        crate::utils::notify::notify(
+        crate::utils::notify::notify_progress(
             config,
             &bili_client,
             format!("🔍 开始处理订阅：{}", video_source.display_name()),
@@ -391,7 +391,7 @@ async fn download_video(
             }
         }
     }
-    crate::utils::notify::notify(
+    crate::utils::notify::notify_progress(
         config,
         &bili_client,
         format!("✅ 本轮订阅检查完成，共处理 {} 个视频源", processed),
@@ -460,7 +460,7 @@ async fn tick_due_subscriptions(cx: &TaskContext) -> Result<()> {
                     let fails = current_fail_count(&cx.connection, table, id).await?;
                     if fails > 0 && fails % 3 == 0 {
                         let msg = format!("订阅「{}」已连续失败 {} 次，最近错误：{:#}", source_name, fails, e);
-                        crate::utils::notify::notify(&config, &client, msg);
+                        crate::utils::notify::notify_error(&config, &client, msg);
                     }
                 }
             }

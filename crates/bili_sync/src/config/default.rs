@@ -28,3 +28,8 @@ pub fn default_collection_path() -> String {
 pub fn default_submission_path() -> String {
     "投稿/{{name}}".to_owned()
 }
+
+/// 通知类开关的默认值：默认开启（进度类消息单独声明为默认关闭）
+pub fn default_notify_on() -> bool {
+    true
+}

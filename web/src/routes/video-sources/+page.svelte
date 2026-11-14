@@ -37,44 +37,47 @@ import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
 	import FilterOptionEditor from '$lib/components/filter-option-editor.svelte';
 
-	let videoSourcesData: VideoSourcesDetailsResponse | null = null;
-	let loading = false;
-	let activeTab = 'favorites';
-	let globalFilterOption: FilterOption | null = null;
+	// 注意：本组件里出现了 $state（dirs / uploadSummary），Svelte 5 会按 runes 模式编译，
+	// 因此这里所有需要驱动视图的状态都必须用 $state，否则赋值不会触发重新渲染
+	// （踩过：视频源页一直显示「加载失败」，接口其实全是 200）
+	let videoSourcesData = $state<VideoSourcesDetailsResponse | null>(null);
+	let loading = $state(false);
+	let activeTab = $state('favorites');
+	let globalFilterOption = $state<FilterOption | null>(null);
 
 	// 添加对话框状态
-	let showAddDialog = false;
-	let addDialogType: 'favorites' | 'collections' | 'submissions' = 'favorites';
-	let adding = false;
+	let showAddDialog = $state(false);
+	let addDialogType = $state<'favorites' | 'collections' | 'submissions'>('favorites');
+	let adding = $state(false);
 
 	// 编辑对话框状态
-	let showEditDialog = false;
-	let editingSource: VideoSourceDetail | null = null;
-	let editingType = '';
-	let editingIdx: number = 0;
-	let saving = false;
-	let useCustomFilterOption = false;
-	let editFilterOption: FilterOption | null = null;
+	let showEditDialog = $state(false);
+	let editingSource = $state<VideoSourceDetail | null>(null);
+	let editingType = $state('');
+	let editingIdx = $state(0);
+	let saving = $state(false);
+	let useCustomFilterOption = $state(false);
+	let editFilterOption = $state<FilterOption | null>(null);
 
 	// 规则评估对话框状态
-	let showEvaluateDialog = false;
-	let evaluateSource: VideoSourceDetail | null = null;
-	let evaluateType = '';
-	let evaluating = false;
+	let showEvaluateDialog = $state(false);
+	let evaluateSource = $state<VideoSourceDetail | null>(null);
+	let evaluateType = $state('');
+	let evaluating = $state(false);
 
 	// 删除对话框状态
-	let showRemoveDialog = false;
-	let removeSource: VideoSourceDetail | null = null;
-	let removeType = '';
-	let removeIdx: number = 0;
-	let removing = false;
+	let showRemoveDialog = $state(false);
+	let removeSource = $state<VideoSourceDetail | null>(null);
+	let removeType = $state('');
+	let removeIdx = $state(0);
+	let removing = $state(false);
 
 	// 全量更新对话框状态
-	let showFullSyncDialog = false;
-	let fullSyncSource: VideoSourceDetail | null = null;
-	let fullSyncType = '';
-	let fullSyncDeleteLocal = false;
-	let fullSyncing = false;
+	let showFullSyncDialog = $state(false);
+	let fullSyncSource = $state<VideoSourceDetail | null>(null);
+	let fullSyncType = $state('');
+	let fullSyncDeleteLocal = $state(false);
+	let fullSyncing = $state(false);
 
 	// 目录预设（用于添加订阅时下拉选择）
 	let dirs = $state<DirPreset[]>([]);
@@ -117,7 +120,7 @@ import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	}
 
 	// 编辑表单数据
-	let editForm = {
+	let editForm = $state({
 		path: '',
 		enabled: false,
 		rule: null as Rule | null,
@@ -127,14 +130,14 @@ import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 		intervalMinutes: 60,
 		cronExpr: '',
 		maxDays: 0
-	};
+	});
 
 	// 表单数据
-	let favoriteForm = { fid: '', path: '' };
-	let collectionForm = { sid: '', mid: '', collection_type: '2', path: '' }; // 默认为合集
+	let favoriteForm = $state({ fid: '', path: '' });
+	let collectionForm = $state({ sid: '', mid: '', collection_type: '2', path: '' }); // 默认为合集
 
 	// 立即执行中的订阅 id（用于禁用按钮）
-	let runningId: number | null = null;
+	let runningId = $state<number | null>(null);
 
 	async function backfillUpper() {
 		try {
@@ -159,7 +162,7 @@ import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 			runningId = null;
 		}
 	}
-	let submissionForm = { upper_id: '', path: '' };
+	let submissionForm = $state({ upper_id: '', path: '' });
 
 	const TAB_CONFIG = {
 		favorites: { label: '收藏夹', icon: HeartIcon },

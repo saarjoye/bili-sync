@@ -1,4 +1,4 @@
-﻿use std::collections::HashSet;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -91,6 +91,17 @@ async fn frontend_files(request: Request) -> impl IntoResponse {
     }
     let mut path = request.uri().path().trim_start_matches('/');
     if path.is_empty() || Asset::get(path).is_none() {
+        // 静态资源（/_app/*、带扩展名的文件）找不到时必须 404：
+        // 之前一律回落 index.html，会让旧缓存里的 chunk 请求拿到一段 HTML，
+        // 浏览器把 HTML 当 JS 执行 → SPA 直接白屏，且报错信息毫无提示。
+        let looks_like_asset = path.starts_with("_app/")
+            || path
+                .rsplit('/')
+                .next()
+                .is_some_and(|last| last.contains('.') && !last.ends_with(".html"));
+        if looks_like_asset {
+            return (StatusCode::NOT_FOUND, "404 Not Found").into_response();
+        }
         path = "index.html";
     }
     if path == "index.html"
@@ -104,9 +115,15 @@ async fn frontend_files(request: Request) -> impl IntoResponse {
     };
     let mime_type = content.mime_type();
     let content_type = mime_type.as_deref().unwrap_or("application/octet-stream");
+    // 带内容哈希的构建产物（_app/immutable/**）可以长缓存；其余一律 no-cache 重新校验
+    let cache_control = if path.starts_with("_app/immutable/") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    };
     let default_headers = [
         (header::CONTENT_TYPE, content_type),
-        (header::CACHE_CONTROL, "no-cache"),
+        (header::CACHE_CONTROL, cache_control),
         (header::ETAG, &content.hash()),
     ];
     if let Some(if_none_match) = request.headers().get(header::IF_NONE_MATCH)

@@ -1,4 +1,4 @@
-<script lang="ts">
+﻿<script lang="ts">
 	import { onMount } from 'svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Switch } from '$lib/components/ui/switch/index.js';
@@ -190,6 +190,17 @@ import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 		}
 	}
 
+	/**
+	 * 深拷贝：Svelte 5 的 $state 是代理对象，structuredClone() 遇到它会直接抛
+	 * DataCloneError（Failed to execute 'structuredClone' on 'Window'），
+	 * 于是「编辑」按钮点了没反应。这里都是纯 JSON 配置，用 JSON 往返最稳。
+	 */
+	function cloneDeep<T>(value: T): T {
+		return value === undefined || value === null
+			? value
+			: (JSON.parse(JSON.stringify(value)) as T);
+	}
+
 	// 打开编辑对话框
 	function openEditDialog(type: string, source: VideoSourceDetail, idx: number) {
 		editingSource = source;
@@ -202,7 +213,7 @@ import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 			rule: source.rule
 		};
 		useCustomFilterOption = source.filterOption !== null;
-		editFilterOption = structuredClone(source.filterOption ?? globalFilterOption!);
+		editFilterOption = cloneDeep(source.filterOption ?? globalFilterOption!);
 		showEditDialog = true;
 	}
 
@@ -292,7 +303,7 @@ import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 					enabled: editForm.enabled,
 					rule: editForm.rule,
 					useDynamicApi: editForm.useDynamicApi,
-					filterOption: useCustomFilterOption ? structuredClone(editFilterOption) : null,
+					filterOption: useCustomFilterOption ? cloneDeep(editFilterOption) : null,
 					ruleDisplay: response.data.ruleDisplay,
 					scheduleMode: editForm.scheduleMode,
 					intervalSeconds: editForm.scheduleMode === 'interval' ? editForm.intervalMinutes * 60 : 0,

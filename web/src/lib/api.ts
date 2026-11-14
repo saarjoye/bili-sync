@@ -194,6 +194,13 @@ class ApiClient {
 				} catch {
 					errorMessage = errorText || `HTTP ${response.status}: ${response.statusText}`;
 				}
+				// 会话过期：统一跳登录页，避免各个页面只显示一句“加载失败”
+				if (response.status === 401 && typeof window !== 'undefined') {
+					const here = window.location.pathname;
+					if (here !== '/login') {
+						window.location.href = `/login?from=${encodeURIComponent(here)}`;
+					}
+				}
 				throw {
 					message: errorMessage,
 					status: response.status

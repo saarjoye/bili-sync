@@ -1,12 +1,15 @@
-//! 账号密码认证：用户表读写、密码哈希、内存会话。
+//! 账号密码认证：用户表读写、密码哈希、会话存储。
 //!
 //! 设计取舍：
 //! - 只做「单用户」登录（首次进入创建账号），够用且实现最小；
 //! - 密码用 SHA-256 + 随机盐 + 10 万次迭代（PBKDF 风格），不引入额外加密依赖；
-//! - 会话存在内存里，进程重启即失效（重新登录即可），不落盘避免额外泄露面；
+//! - 会话（1.0.x 起）在内存之外**持久化到 config 目录下的 sessions.json**（0600 权限），
+//!   否则每次升级/重启容器都要重新登录一遍（开发期频繁重建容器时尤其烦）；
 //! - 仍然保留旧的 `auth_token`（Authorization 头）作为**机器调用**通道，
 //!   这样订阅助手/脚本/Webhook 不受影响。
 
+use std::collections::HashMap;
+use std::fs;
 use std::sync::LazyLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -15,6 +18,8 @@ use dashmap::DashMap;
 use rand::seq::IndexedRandom;
 use sea_orm::{ConnectionTrait, DatabaseConnection, Statement, Value};
 use sha2::{Digest, Sha256};
+
+use crate::config::CONFIG_DIR;
 
 /// 会话有效期：7 天
 const SESSION_TTL: Duration = Duration::from_secs(7 * 24 * 3600);
@@ -34,6 +39,72 @@ pub struct Session {
 
 /// 进程内会话表（token -> 会话）
 static SESSIONS: LazyLock<DashMap<String, Session>> = LazyLock::new(DashMap::new);
+/// 是否已从磁盘加载过会话
+static SESSIONS_LOADED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn sessions_path() -> std::path::PathBuf {
+    CONFIG_DIR.join("sessions.json")
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// 首次访问时把落盘的会话读回内存（过期项丢弃），让重启/升级后不用重新登录
+fn ensure_sessions_loaded() {
+    if SESSIONS_LOADED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let Ok(text) = fs::read_to_string(sessions_path()) else {
+        return;
+    };
+    let Ok(saved) = serde_json::from_str::<HashMap<String, (String, u64)>>(&text) else {
+        return;
+    };
+    let now = unix_now();
+    for (token, (username, expires)) in saved {
+        if expires > now {
+            SESSIONS.insert(
+                token,
+                Session {
+                    username,
+                    expires_at: UNIX_EPOCH + Duration::from_secs(expires),
+                },
+            );
+        }
+    }
+}
+
+/// 把当前有效会话写回磁盘（0600，仅本用户可读）
+fn persist_sessions() {
+    let now = unix_now();
+    let mut map: HashMap<String, (String, u64)> = HashMap::new();
+    for entry in SESSIONS.iter() {
+        if let Ok(exp) = entry.value().expires_at.duration_since(UNIX_EPOCH) {
+            let exp = exp.as_secs();
+            if exp > now {
+                map.insert(entry.key().clone(), (entry.value().username.clone(), exp));
+            }
+        }
+    }
+    let Ok(text) = serde_json::to_string(&map) else {
+        return;
+    };
+    let path = sessions_path();
+    let tmp = path.with_extension("json.tmp");
+    if fs::write(&tmp, text).is_err() {
+        return;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600));
+    }
+    let _ = fs::rename(&tmp, &path);
+}
 
 #[derive(Clone)]
 pub struct UserRecord {
@@ -159,6 +230,7 @@ pub fn validate_credentials(username: &str, password: &str) -> Result<()> {
 
 /// 新建会话，返回 token 与有效期秒数
 pub fn create_session(username: &str) -> (String, u64) {
+    ensure_sessions_loaded();
     let token = generate_session_token();
     SESSIONS.insert(
         token.clone(),
@@ -167,15 +239,18 @@ pub fn create_session(username: &str) -> (String, u64) {
             expires_at: SystemTime::now() + SESSION_TTL,
         },
     );
+    persist_sessions();
     (token, SESSION_TTL.as_secs())
 }
 
 pub fn drop_session(token: &str) {
     SESSIONS.remove(token);
+    persist_sessions();
 }
 
 /// 校验会话 token，顺带清理过期项
 pub fn check_session(token: &str) -> Option<Session> {
+    ensure_sessions_loaded();
     let now = SystemTime::now();
     if let Some(entry) = SESSIONS.get(token) {
         if entry.expires_at > now {
@@ -183,6 +258,7 @@ pub fn check_session(token: &str) -> Option<Session> {
         }
     }
     SESSIONS.remove(token);
+    persist_sessions();
     None
 }
 
